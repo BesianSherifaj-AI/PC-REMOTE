@@ -341,7 +341,7 @@
   function nativeFullscreen() { return document.fullscreenElement || document.webkitFullscreenElement || document.webkitCurrentFullScreenElement; }
   function fullscreenMethod(target) { return document.fullscreenEnabled !== false && target.requestFullscreen || document.webkitFullscreenEnabled !== false && (target.webkitRequestFullscreen || target.webkitRequestFullScreen); }
   function fullscreenChanged() {
-    var active = nativeFullscreen(), appMode = standaloneMode() || !fullscreenMethod(document.documentElement);
+    var active = nativeFullscreen(), appMode = !fullscreenMethod(document.documentElement);
     text('appFullscreen', active ? 'Exit full screen' : appMode ? 'App mode' : 'Full screen'); el('appFullscreen').setAttribute('aria-pressed', String(!!active));
     text('desktopFullscreen', expandedTarget === el('desktopFrame') ? 'Exit expanded view' : active === el('desktopFrame') ? 'Exit desktop' : 'Expand desktop'); el('desktopFullscreen').setAttribute('aria-pressed', String(active === el('desktopFrame') || expandedTarget === el('desktopFrame'))); sizeChrome();
   }
@@ -371,7 +371,7 @@
     var active = nativeFullscreen(), result, generation = ++fullscreenGeneration;
     if (expandedTarget === target) { exitExpanded(); return; }
     if (active && (target === document.documentElement || active === target)) { exitNativeFullscreen(); return; }
-    if (target === document.documentElement && (standaloneMode() || !fullscreenMethod(target))) { showAppModeHelp(false); return; }
+    if (target === document.documentElement && !fullscreenMethod(target)) { showAppModeHelp(false); return; }
     function failed(unavailable) {
       if (generation !== fullscreenGeneration) { return; }
       if (target === document.documentElement) { showAppModeHelp(true); toast(unavailable ? 'Full screen is unavailable in this browser. Use App mode below.' : 'Full screen was blocked by the browser. See App mode below.'); }

@@ -326,9 +326,12 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
   assert.equal(noNative.elements.appModeHelp.open, true); assert.equal(noNative.document.activeElement, noNative.elements.appModeHelp);
   assert.equal(noNative.document.body.getAttribute('data-expanded'), null); assert.equal(noNative.elements.appFullscreen.getAttribute('aria-pressed'), 'false');
   for (const mode of [{standalone: true}, {displayMode: true}]) {
-    let calls = 0; const installed = harness({...mode, configure({root}) { root.requestFullscreen = () => { calls++; }; }});
-    assert.equal(installed.elements.appFullscreen.textContent, 'App mode'); installed.elements.appFullscreen.onclick(); assert.equal(calls, 0);
+    const installed = harness(mode);
+    assert.equal(installed.elements.appFullscreen.textContent, 'App mode'); installed.elements.appFullscreen.onclick();
     assert.match(installed.elements.appModeStatus.textContent, /Already running in app mode/);
+    let calls = 0; const installedPC = harness({...mode, configure({root}) { root.requestFullscreen = () => { calls++; }; }});
+    assert.equal(installedPC.elements.appFullscreen.textContent, 'Full screen'); installedPC.elements.appFullscreen.onclick(); assert.equal(calls, 1, 'Installed desktop apps must retain supported native fullscreen');
+    assert.notEqual(installedPC.elements.appModeHelp.open, true);
   }
   let forbidden = 0; const denied = harness({configure({root, document}) { document.fullscreenEnabled = false; root.requestFullscreen = () => { forbidden++; }; }});
   denied.elements.appFullscreen.onclick(); assert.equal(forbidden, 0); assert.equal(denied.elements.appModeHelp.open, true);
