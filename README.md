@@ -72,6 +72,14 @@ The current address is also stored in `.runtime/server.url`. `localhost` on the 
 
 **Desktop touch:** stay in Control for one-finger Windows input and two-finger pan/zoom. Optional Pan only moves the view with one finger; View only blocks Windows input. Use the Keyboard button to type into the focused Windows field. Fullscreen requires a browser-supported user tap.
 
+### Open PC Remote like an app
+
+On iPhone, open your dashboard's secure HTTPS address in **Safari**, choose **Share → Add to Home Screen**, enable **Open as Web App** if offered, then tap **Add**. Launch the new PC Remote icon to open it without Safari's address bar. This is the supported app-style view when iPhone Safari does not offer page fullscreen. [Apple's Home Screen instructions](https://support.apple.com/guide/iphone/iphea86e5236/ios).
+
+On a PC browser, **Full screen** requests native fullscreen; press **Esc** or use the exit control to return. **Expand desktop** focuses the viewer. Browser permissions and platform support still apply.
+
+The installed web app may keep separate browser storage. If it shows **Connect to your PC**, request connection and approve that installation from the Windows PC's local dashboard. Installing the icon does not grant access or bypass pairing. The PC must stay online; installation does not provide offline desktop access.
+
 ## Local AI, images, and speech
 
 LM Studio is reached only by the PC backend at `127.0.0.1:1234`. In Chat, select a loaded model from the model bar above the conversation. Expand **Model settings** to open LM Studio, start its localhost API, or load an already installed model. These controls stay collapsed during ordinary chat. Model selection is explicit; the dashboard never substitutes a different model or downloads one automatically.

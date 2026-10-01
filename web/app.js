@@ -8,6 +8,7 @@
   var liveVoice = false, quickSignature = '', pendingModelSelection = '';
   var loadedModels = [], modelsReady = false;
   var modelSignature = '', availableSignature = '', remoteSignature = '', healthBusy = false;
+  var expandedTarget = null, expansionFocus = null, fullscreenGeneration = 0;
   var desktopWanted = false, desktopState = 'disconnected', desktopMode = 'control', desktopGeneration = 0, desktopRetry = 0, desktopRetryTimer = null, desktopWatchdog = null;
   var voice = window.createMaicVoice({liveMode: function () { return liveVoice; }, onError: function () { stopLive(); }, onIdle: function (reason) { if (liveVoice && reason !== 'transcribed') { stopLive(); } }, token: function () { return token; }, append: function (value) {
     var input = el('chatInput'); input.value = (input.value ? input.value + ' ' : '') + value; updateChatControls(); input.scrollIntoView({block: 'nearest'}); if (liveVoice) { sendChat({preventDefault: function () {}}); }
@@ -58,6 +59,7 @@
     });
   }
   function showPage(name) {
+    fullscreenGeneration++; exitExpanded(false);
     if (['home', 'apps', 'desktop', 'chat', 'comfy'].indexOf(name) < 0) { name = 'home'; }
     page = name; each('.page', function (item) { item.hidden = item.id !== page; });
     document.body.setAttribute('data-page', name);
@@ -279,6 +281,7 @@
       text('comfyMessage', error || data.message); if (error) { return; }
       text('comfyRunning', data.available ? data.queue.running : '—'); text('comfyPending', data.available ? data.queue.pending : '—');
       var signature = JSON.stringify({available: data.available, outputs: data.outputs}); if (signature === outputSignature) { return; } outputSignature = signature;
+      if (expandedTarget && document.body.getAttribute('data-expanded') === 'media') { outputSignature = ''; return; }
       var container = el('comfyOutputs'); if (container.querySelector('video') && Array.prototype.some.call(container.querySelectorAll('video'), function (v) { return !v.paused; })) { outputSignature = ''; return; } container.textContent = '';
       if (!data.outputs.length) { var empty = document.createElement('article'); empty.className = 'card empty-state'; empty.setAttribute('role', 'status'); empty.textContent = data.available ? 'No recent outputs yet. New ComfyUI results appear here.' : 'Start ComfyUI on your PC to see results.'; container.appendChild(empty); }
       data.outputs.forEach(function (item) {
@@ -333,21 +336,54 @@
       }, true);
     }, true);
   }
-  function sizeChrome() { document.documentElement.style.setProperty('--viewport-height', Math.round(window.visualViewport ? window.visualViewport.height : window.innerHeight || 600) + 'px'); var chrome = document.querySelector('.app-chrome'); document.documentElement.style.setProperty('--chrome-height', chrome.offsetHeight + 'px'); }
+  function sizeChrome() { document.documentElement.style.setProperty('--viewport-height', Math.round(window.visualViewport ? window.visualViewport.height : window.innerHeight || 600) + 'px'); document.documentElement.style.setProperty('--viewport-top', Math.round(window.visualViewport && window.visualViewport.offsetTop || 0) + 'px'); var chrome = document.querySelector('.app-chrome'); document.documentElement.style.setProperty('--chrome-height', chrome.offsetHeight + 'px'); }
+  function standaloneMode() { return !!navigator.standalone || !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches); }
+  function nativeFullscreen() { return document.fullscreenElement || document.webkitFullscreenElement || document.webkitCurrentFullScreenElement; }
+  function fullscreenMethod(target) { return document.fullscreenEnabled !== false && target.requestFullscreen || document.webkitFullscreenEnabled !== false && (target.webkitRequestFullscreen || target.webkitRequestFullScreen); }
   function fullscreenChanged() {
-    var active = document.fullscreenElement || document.webkitFullscreenElement;
-    text('appFullscreen', active ? 'Exit full screen' : 'Full screen'); el('appFullscreen').setAttribute('aria-pressed', String(!!active));
-    text('desktopFullscreen', active === el('desktopFrame') ? 'Exit desktop' : 'Expand desktop'); el('desktopFullscreen').setAttribute('aria-pressed', String(active === el('desktopFrame'))); sizeChrome();
+    var active = nativeFullscreen(), appMode = standaloneMode() || !fullscreenMethod(document.documentElement);
+    text('appFullscreen', active ? 'Exit full screen' : appMode ? 'App mode' : 'Full screen'); el('appFullscreen').setAttribute('aria-pressed', String(!!active));
+    text('desktopFullscreen', expandedTarget === el('desktopFrame') ? 'Exit expanded view' : active === el('desktopFrame') ? 'Exit desktop' : 'Expand desktop'); el('desktopFullscreen').setAttribute('aria-pressed', String(active === el('desktopFrame') || expandedTarget === el('desktopFrame'))); sizeChrome();
+  }
+  function exitExpanded(restoreFocus) {
+    if (!expandedTarget) { return; } var previous = expansionFocus;
+    expandedTarget.className = expandedTarget.className.replace(/(?:^|\s)browser-expanded(?=\s|$)/g, '').trim(); expandedTarget = null; expansionFocus = null;
+    document.body.removeAttribute('data-expanded'); el('expandedExit').hidden = true; fullscreenChanged();
+    if (restoreFocus !== false && previous && previous.isConnected !== false && previous.focus) { previous.focus(); }
+  }
+  function expandInBrowser(target) {
+    var previous = document.activeElement; exitExpanded(false); expandedTarget = target; expansionFocus = previous;
+    target.className = (target.className + ' browser-expanded').trim(); document.body.setAttribute('data-expanded', target === el('desktopFrame') ? 'desktop' : 'media');
+    el('expandedExit').hidden = false; el('expandedExit').textContent = 'Exit expanded view'; el('expandedExit').focus(); fullscreenChanged();
+  }
+  function showAppModeHelp(blocked) {
+    showPage('home'); var help = el('appModeHelp'), status = document.getElementById('appModeStatus');
+    if (status) { status.textContent = standaloneMode() ? 'Already running in app mode.' : blocked ? 'Full screen was blocked. Use the app-mode steps below.' : 'Use the steps below to open this page in app mode.'; }
+    help.open = true; help.scrollIntoView({block: 'nearest'}); if (help.focus) { help.focus(); }
+  }
+  function exitNativeFullscreen() {
+    var method = document.exitFullscreen || document.webkitExitFullscreen || document.webkitCancelFullScreen;
+    function failed() { toast('Could not exit full screen. Try again or use the browser’s Escape/exit control.'); }
+    if (!method) { failed(); return; }
+    try { var result = method.call(document); if (result && result.catch) { result.catch(failed); } } catch (error) { failed(); }
   }
   function toggleFullscreen(target) {
-    var active = document.fullscreenElement || document.webkitFullscreenElement, result;
+    var active = nativeFullscreen(), result, generation = ++fullscreenGeneration;
+    if (expandedTarget === target) { exitExpanded(); return; }
+    if (active && (target === document.documentElement || active === target)) { exitNativeFullscreen(); return; }
+    if (target === document.documentElement && (standaloneMode() || !fullscreenMethod(target))) { showAppModeHelp(false); return; }
+    function failed(unavailable) {
+      if (generation !== fullscreenGeneration) { return; }
+      if (target === document.documentElement) { showAppModeHelp(true); toast(unavailable ? 'Full screen is unavailable in this browser. Use App mode below.' : 'Full screen was blocked by the browser. See App mode below.'); }
+      else { expandInBrowser(target); toast('Expanded within the browser. Use Exit expanded view to return.'); }
+    }
     try {
-      if (active && (target === document.documentElement || active === target)) { result = document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen(); }
-      else if (target.requestFullscreen) { result = target.requestFullscreen(); }
-      else if (target.webkitRequestFullscreen) { result = target.webkitRequestFullscreen(); }
-      else { toast('This browser cannot hide its system bars. The dashboard still fits the screen.'); return; }
-      if (result && result.catch) { result.catch(function () { toast('Full screen was blocked by the browser. Try the Full screen button directly.'); }); }
-    } catch (error) { toast('Full screen is unavailable in this browser.'); }
+      var method = fullscreenMethod(target);
+      if (method) { exitExpanded(false); result = method.call(target); }
+      else if (target.tagName === 'VIDEO' && (target.webkitEnterFullscreen || target.webkitEnterFullScreen)) { result = (target.webkitEnterFullscreen || target.webkitEnterFullScreen).call(target); }
+      else { expandInBrowser(target); return; }
+      if (result && result.catch) { result.catch(function () { failed(false); }); }
+    } catch (error) { failed(true); }
   }
   function toggleDesktopFullscreen() { toggleFullscreen(el('desktopFrame')); }
   function updateDesktopControls() {
@@ -400,9 +436,11 @@
   el('desktopDisconnect').onclick = disconnectDesktop;
   el('desktopFullscreen').onclick = toggleDesktopFullscreen;
   el('appFullscreen').onclick = function () { toggleFullscreen(document.documentElement); };
+  el('expandedExit').onclick = function () { fullscreenGeneration++; exitExpanded(); };
+  document.addEventListener('keydown', function (event) { if (expandedTarget && (event.key === 'Escape' || event.keyCode === 27)) { event.preventDefault(); fullscreenGeneration++; exitExpanded(); } });
   el('desktopAutoReconnect').onchange = function () { if (!this.checked) { clearTimeout(desktopRetryTimer); } else if (desktopState === 'disconnected') { desktopRetry = 0; scheduleDesktopRetry(); } };
   document.addEventListener('fullscreenchange', fullscreenChanged); document.addEventListener('webkitfullscreenchange', fullscreenChanged);
-  window.addEventListener('resize', sizeChrome); if (window.visualViewport) { window.visualViewport.addEventListener('resize', sizeChrome); } if (window.ResizeObserver) { new ResizeObserver(sizeChrome).observe(document.querySelector('.app-chrome')); }
+  window.addEventListener('resize', sizeChrome); if (window.visualViewport) { window.visualViewport.addEventListener('resize', sizeChrome); window.visualViewport.addEventListener('scroll', sizeChrome); } if (window.ResizeObserver) { new ResizeObserver(sizeChrome).observe(document.querySelector('.app-chrome')); }
   function checkConnection() {
     if (healthBusy) { return; } healthBusy = true; var started = Date.now();
     get('/api/health', function (error) {
@@ -460,7 +498,7 @@
   window.addEventListener('online', checkConnection);
   window.addEventListener('offline', function () { document.body.setAttribute('data-online', 'false'); text('connection', 'Device is offline'); });
   document.addEventListener('visibilitychange', function () { if (document.hidden) { stopLive(); voice.cancel(); } if (desktopState === 'connected') { el('viewer').contentWindow.postMessage({type: !document.hidden && page === 'desktop' ? 'maic-viewer-resume' : 'maic-viewer-suspend', connectionId: desktopGeneration}, location.origin); } if (!document.hidden) { checkConnection(); if (localPC) { loadRemote(); } if (desktopWanted && desktopState === 'disconnected') { desktopRetry = 0; scheduleDesktopRetry(); } } });
-  text('address', 'Dashboard: ' + window.location.origin + '/'); sizeChrome();
+  text('address', 'Dashboard: ' + window.location.origin + '/'); fullscreenChanged();
   if (location.hash && location.hash !== '#access') { showPage(location.hash.slice(1)); }
   connect(); renderTimer();
   setInterval(renderTimer, 500); setInterval(function () { if (document.hidden) { return; } if (page === 'apps') { loadAppState(); } }, 2000);
@@ -468,5 +506,5 @@
   setInterval(function () { if (!document.hidden && page === 'chat') { loadModels(); } }, 8000);
   setInterval(function () { if (!document.hidden && localPC) { loadRemote(); } }, 3000);
   setInterval(function () { if (!document.hidden) { checkConnection(); } }, 15000);
-  window.addEventListener('pagehide', function () { stopLive(); voice.cancel(); stopChat(); stopReading(); disconnectDesktop(); });
+  window.addEventListener('pagehide', function () { fullscreenGeneration++; exitExpanded(false); stopLive(); voice.cancel(); stopChat(); stopReading(); disconnectDesktop(); });
 }());

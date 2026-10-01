@@ -8,8 +8,8 @@ button:hover,.button-link:hover{background:#285044}button:active{transform:trans
 button.quiet,.button-link.quiet{background:#f5f7f1;border-color:var(--edge);color:var(--text)}button.quiet:hover,.button-link.quiet:hover{background:#eaf0e2}
 button.accent{background:var(--accent);color:#183226}button.accent:hover{background:#d1f3a4}
 button[aria-pressed=true],button.favourited{background:#dcebcf;border-color:#91b17a;color:#264021}
-button:focus-visible,a:focus-visible,input:focus,select:focus,textarea:focus,summary:focus-visible{outline:2px solid #528745;outline-offset:3px}
-@supports not selector(:focus-visible){button:focus,a:focus,summary:focus{outline:2px solid #528745;outline-offset:2px}}
+button:focus,a:focus,input:focus,select:focus,textarea:focus,summary:focus{outline:2px solid #528745;outline-offset:3px}
+button:focus:not(:focus-visible),a:focus:not(:focus-visible),summary:focus:not(:focus-visible){outline:none}
 button .icon{vertical-align:middle;margin-left:12px;width:19px;height:19px}
 input,select,textarea{width:100%;min-width:0;min-height:44px;border:1px solid #d4dccf;border-radius:10px;background:#fff;color:var(--text);padding:11px 12px;font-size:15px}
 textarea{resize:vertical}input::placeholder,textarea::placeholder{color:#69785f}
@@ -134,3 +134,19 @@ body[data-page=chat] main{padding:16px 12px calc(88px + env(safe-area-inset-bott
 .empty-state{grid-column:1/-1;text-align:center;padding:35px 20px;color:var(--dim);font-size:13px;background:#fafbf7}
 
 @media(min-width:721px) and (max-height:650px){#home>.intro>p:not(.eyebrow){display:none}.desktop-launch{min-height:174px;padding:16px 23px}.desktop-launch .section-label,.desktop-launch p{display:none}.desktop-launch h2{font-size:24px;margin:0 0 16px}.monitor-art{max-height:142px}.launch-grid{margin-bottom:20px}.quick-launch{grid-gap:12px}.quick-tile{padding:14px}.quick-tile .tile-icon{width:34px;height:34px}.card-heading{margin-bottom:12px}}
+
+/* Keep app controls inside notches in standalone and native fullscreen modes. */
+body{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+.app-chrome{padding-top:env(safe-area-inset-top,0px);height:calc(var(--header-size,76px) + env(safe-area-inset-top,0px))}
+nav{left:env(safe-area-inset-left,0px);top:var(--chrome-height)}
+.app-mode-help{scroll-margin-top:calc(var(--chrome-height) + 14px)}.app-mode-help ol{padding-left:22px;font-size:13px;color:var(--dim);line-height:1.7}.app-mode-help li+li{margin-top:8px}
+@media(min-width:721px) and (max-height:650px){:root{--header-size:64px}}
+@media(max-width:720px){:root{--header-size:96px}nav{top:auto;right:env(safe-area-inset-right,0px);width:auto}}
+/* A browser-area expansion is available even without a Fullscreen API. */
+body[data-expanded]{overflow:hidden}
+body[data-expanded] .app-chrome,body[data-expanded] .page>*,body[data-expanded] #pcApproval{visibility:hidden}
+body[data-expanded]:before{content:"";position:fixed;top:0;right:0;bottom:0;left:0;background:#13251e;z-index:100}
+body[data-expanded] .browser-expanded{visibility:visible!important;position:fixed!important;z-index:101;left:0;top:calc(var(--viewport-top,0px) + 52px + env(safe-area-inset-top,0px));width:100vw!important;height:calc(var(--viewport-height,100vh) - 52px - env(safe-area-inset-top,0px))!important;min-height:0!important;max-height:none!important;max-width:none!important;margin:0!important;border:0!important;border-radius:0!important;background:#13251e;object-fit:contain}
+body[data-expanded=media] .browser-expanded{padding:0 env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+#expandedExit{position:fixed;z-index:102;top:calc(var(--viewport-top,0px) + 4px + env(safe-area-inset-top,0px));right:calc(8px + env(safe-area-inset-right,0px));min-height:44px;background:#e7eddf;color:#18392f;border-color:#a5b798;font-size:12px}
+body[data-expanded] #toast{z-index:103}

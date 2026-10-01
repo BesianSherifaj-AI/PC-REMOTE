@@ -28,6 +28,12 @@ SESSION_SECONDS = 30 * 86400
 MAX_PENDING = 32
 MAX_DEVICES = 64
 MAX_BODY = 2 * 1024 * 1024
+PUBLIC_APP_ASSETS = {
+    '/manifest.webmanifest': 'application/manifest+json',
+    '/icon-192.png': 'image/png',
+    '/icon-512.png': 'image/png',
+    '/apple-touch-icon.png': 'image/png',
+}
 GET_PATHS = frozenset((
     '/', '/app.js', '/voice.js', '/chat-media.js', '/style.css', '/desktop-viewer.html', '/tone.wav',
     '/api/health', '/api/status', '/api/apps', '/api/control-session', '/api/audio',
@@ -44,7 +50,12 @@ HOP_HEADERS = frozenset((
     'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'origin',
 ))
 PAIR_PAGE = b'''<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to your PC</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Connect to your PC</title>
+<meta name="theme-color" content="#f4f5ef"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="PC Remote">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <style>*{box-sizing:border-box}body{background:#f4f5ef;color:#1d3028;font:16px "Segoe UI",Roboto,Arial,sans-serif;margin:0;padding:32px 20px}
 main{max-width:520px;margin:8vh auto;background:#fff;border:1px solid #dde2d7;border-radius:22px;padding:34px;box-shadow:0 12px 40px #243a2308}
 h1{font-size:30px;font-weight:600;letter-spacing:-1px;line-height:1.2;margin:0 0 18px}h1:before{content:"PC REMOTE";display:block;color:#647553;font-size:10px;letter-spacing:2px;margin-bottom:22px}
@@ -446,6 +457,15 @@ class RemoteGateway:
     async def _handle(self, request):
         self._check_request(request)
         path = request.path
+        if request.method == 'GET' and path in PUBLIC_APP_ASSETS:
+            # Only these non-private install assets are public. Read them from
+            # the fixed web root without forwarding cookies or opening APIs.
+            web_root = (self.root / 'web').resolve()
+            asset = (web_root / path[1:]).resolve()
+            if web_root not in asset.parents or not asset.is_file():
+                raise web.HTTPNotFound(text='App asset unavailable.')
+            return web.Response(body=asset.read_bytes(), content_type=PUBLIC_APP_ASSETS[path],
+                                headers={'Cache-Control': 'no-store'})
         if path == '/_remote/health' and request.method == 'GET':
             return web.json_response({'ok': True, 'service': 'MAICRemote', 'enabled': True})
         if path == '/_remote/pair' and request.method == 'POST':

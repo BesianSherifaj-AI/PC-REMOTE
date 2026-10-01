@@ -139,6 +139,10 @@ class GatewayTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='maic-gateway-test-')
         self.root = Path(self.temporary.name)
+        web_root = self.root / 'web'
+        web_root.mkdir()
+        for filename in ('manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'):
+            (web_root / filename).write_bytes((Path(__file__).resolve().parents[1] / 'web' / filename).read_bytes())
         self.gateway = RemoteGateway(self.root, self.origin, desktop_port=self.ws_port, public_origin=ORIGIN, port=0)
         self.gateway.start()
         self.start_seen = len(self.upstream.seen)
@@ -214,6 +218,36 @@ class GatewayTests(unittest.TestCase):
             self.assertFalse(self.gateway.status()['pending'])
         finally:
             self.gateway.upstream = original
+
+    def test_only_explicit_install_assets_are_public_without_granting_a_session(self):
+        assets = {'/manifest.webmanifest': 'application/manifest+json', '/icon-192.png': 'image/png',
+                  '/icon-512.png': 'image/png', '/apple-touch-icon.png': 'image/png'}
+        approved, pending = self.approved(), self.pair()
+        for cookie, state in ((None, 'unpaired'), (pending, 'pending'), (approved, 'approved')):
+            for path, mime in assets.items():
+                with self.subTest(cookie_state='anonymous' if cookie is None else 'paired', path=path):
+                    status, headers, body = self.request('GET', path, cookie=cookie, origin=None)
+                    self.assertEqual(status, 200)
+                    self.assertIn(('Content-Type', mime), headers)
+                    self.assertIn(('Cache-Control', 'no-store'), headers)
+                    self.assertFalse(any(name.lower() == 'set-cookie' for name, _ in headers))
+                    self.assertEqual(body, (self.root / 'web' / path[1:]).read_bytes())
+            self.assertEqual(json.loads(self.request('GET', '/_remote/session', cookie=cookie)[2])['state'], state)
+        status, _, pairing_page = self.request('GET', '/', origin=None)
+        self.assertEqual(status, 200)
+        self.assertIn(b'rel="manifest" href="/manifest.webmanifest"', pairing_page)
+        self.assertIn(b'rel="apple-touch-icon" href="/apple-touch-icon.png"', pairing_page)
+        self.assertIn(b'name="apple-mobile-web-app-capable" content="yes"', pairing_page)
+        for path in (*assets, '/app.js', '/style.css', '/api/control-session', '/api/pc/apps'):
+            self.assertEqual(self.request('POST', path, {})[0], 403)
+        for path in ('/other.png', '/manifest.json', '/web/icon-192.png', '/icon-192.png/private.js',
+                     '/app.js', '/style.css', '/api/control-session', '/api/pc/apps', '/desktop/ws'):
+            self.assertEqual(self.request('GET', path)[0], 403)
+        self.assertEqual(self.request('GET', '/manifest.webmanifest?token=private')[0], 400)
+        self.assertEqual(self.request('GET', '/%2e%2e/manifest.webmanifest')[0], 400)
+        self.assertEqual(self.request('GET', '/icon-192.png', origin='https://unrelated.invalid')[0], 403)
+        self.assertEqual(self.request('GET', '/manifest.webmanifest', host='unrelated.invalid')[0], 403)
+        self.assertEqual(len(self.upstream.seen), self.start_seen)
 
     def test_pair_requires_exact_host_and_origin_and_safe_payload(self):
         for values in ({'origin': 'https://evil.example'}, {'origin': None}, {'host': 'localhost:8842'}):

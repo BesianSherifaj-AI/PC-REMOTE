@@ -5,7 +5,7 @@ const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../web/app.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '../web/index.html'), 'utf8');
 
-function harness({hash = ''} = {}) {
+function harness({hash = '', standalone = false, displayMode = false, configure} = {}) {
   const elements = {}, requests = [], timers = new Map(), intervals = new Map(), windowEvents = {}, documentEvents = {};
   let serial = 0;
   class Element {
@@ -28,6 +28,7 @@ function harness({hash = ''} = {}) {
     querySelectorAll(selector) { const found = []; this.children.forEach(child => { if (child.tagName.toLowerCase() === selector) found.push(child); found.push(...child.querySelectorAll(selector)); }); return found; }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
     scrollIntoView() {} reset() {} pause() { this.paused = true; }
+    focus() { document.activeElement = this; }
   }
   for (const match of html.matchAll(/<([a-z][a-z0-9]*)\b[^>]*\bid="([^"]+)"/gi)) elements[match[2]] = new Element(match[1], match[2]);
   for (const id of ['model', 'availableModel']) { const option = new Element('option'); option.value = ''; elements[id].appendChild(option); }
@@ -63,7 +64,7 @@ function harness({hash = ''} = {}) {
   const reader = {loaded: 0, stopped: 0, spoken: [], ready: () => true, load() { this.loaded++; }, stop() { this.stopped++; },
     speak(value) { this.spoken.push(value); }, ended() { readerOptions.onEnded(); }, fail() { readerOptions.onError(); }};
   const window = {
-    location, scrollTo() {}, createMaicVoice(options) { voiceOptions = options; return voice; },
+    location, scrollTo() {}, matchMedia: () => ({matches: displayMode}), createMaicVoice(options) { voiceOptions = options; return voice; },
     createMaicAttachments(options) { attachmentOptions = options; return attachments; },
     createMaicReader(options) { readerOptions = options; return reader; },
     addEventListener(name, callback) { (windowEvents[name] || (windowEvents[name] = [])).push(callback); }
@@ -78,7 +79,8 @@ function harness({hash = ''} = {}) {
   }
   function timeout(fn, ms) { timers.set(++serial, {fn, ms}); return serial; }
   function pending(url) { const found = requests.filter(request => request.sent && !request.settled && !request.aborted && request.url === url); assert.ok(found.length, 'Expected pending request: ' + url); return found[found.length - 1]; }
-  const context = {window, document, location, navigator: {language: 'en'}, XMLHttpRequest,
+  if (configure) configure({window, document, root, elements});
+  const context = {window, document, location, navigator: {language: 'en', standalone}, XMLHttpRequest,
     history: {replaceState(_a, _b, value) { location.hash = value; }},
     setTimeout: timeout, clearTimeout: id => timers.delete(id),
     setInterval(fn, ms) { intervals.set(++serial, {fn, ms}); return serial; }, clearInterval: id => intervals.delete(id),
@@ -89,6 +91,7 @@ function harness({hash = ''} = {}) {
   function models(value) { pending('/api/lm/models').respond(value); }
   function message(data) { windowEvents.message.forEach(callback => callback({data, origin: location.origin, source: elements.viewer.contentWindow})); }
   return {elements, requests, timers, intervals, document, root, sent, page, pending, models, message, voice, attachments, reader,
+    emitDocument(name, event = {}) { documentEvents[name].forEach(callback => callback(event)); },
     navigateHash(value) { location.hash = value; windowEvents.hashchange.forEach(callback => callback()); },
     visibility(hidden) { document.hidden = hidden; documentEvents.visibilitychange.forEach(callback => callback()); }};
 }
@@ -318,11 +321,57 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
   const sessionRequests = count(desktop, '/api/desktop/session'); delayedSession.respond({ok: true, token: 'obsolete-memory-session'});
   assert.equal(count(desktop, '/api/desktop/session'), sessionRequests, 'Cancelled connection negotiation must not create a desktop session');
 
-  const fullscreen = harness(); fullscreen.root.requestFullscreen = () => Promise.reject(new Error('synthetic browser restriction'));
-  fullscreen.elements.appFullscreen.onclick(); await ready(); assert.match(fullscreen.elements.toast.textContent, /blocked by the browser/);
-  fullscreen.elements.desktopFrame.requestFullscreen = () => Promise.reject(new Error('synthetic browser restriction'));
-  fullscreen.elements.desktopFullscreen.onclick(); await ready(); assert.match(fullscreen.elements.toast.textContent, /blocked by the browser/);
-  fullscreen.root.requestFullscreen = () => { throw new Error('synthetic unsupported fullscreen'); };
-  fullscreen.elements.appFullscreen.onclick(); assert.match(fullscreen.elements.toast.textContent, /unavailable/);
+  const noNative = harness(); assert.equal(noNative.elements.appFullscreen.textContent, 'App mode');
+  noNative.page('apps'); noNative.elements.appFullscreen.onclick(); assert.equal(noNative.document.body.getAttribute('data-page'), 'home');
+  assert.equal(noNative.elements.appModeHelp.open, true); assert.equal(noNative.document.activeElement, noNative.elements.appModeHelp);
+  assert.equal(noNative.document.body.getAttribute('data-expanded'), null); assert.equal(noNative.elements.appFullscreen.getAttribute('aria-pressed'), 'false');
+  for (const mode of [{standalone: true}, {displayMode: true}]) {
+    let calls = 0; const installed = harness({...mode, configure({root}) { root.requestFullscreen = () => { calls++; }; }});
+    assert.equal(installed.elements.appFullscreen.textContent, 'App mode'); installed.elements.appFullscreen.onclick(); assert.equal(calls, 0);
+    assert.match(installed.elements.appModeStatus.textContent, /Already running in app mode/);
+  }
+  let forbidden = 0; const denied = harness({configure({root, document}) { document.fullscreenEnabled = false; root.requestFullscreen = () => { forbidden++; }; }});
+  denied.elements.appFullscreen.onclick(); assert.equal(forbidden, 0); assert.equal(denied.elements.appModeHelp.open, true);
+  const browser = harness(); browser.page('desktop'); browser.elements.desktopFullscreen.focus(); browser.elements.desktopFullscreen.onclick();
+  assert.equal(browser.document.body.getAttribute('data-expanded'), 'desktop'); assert.match(browser.elements.desktopFrame.className, /browser-expanded/);
+  assert.equal(browser.elements.expandedExit.hidden, false); assert.equal(browser.document.activeElement, browser.elements.expandedExit);
+  assert.equal(browser.elements.appFullscreen.getAttribute('aria-pressed'), 'false', 'Browser expansion must not claim native fullscreen');
+  browser.elements.expandedExit.onclick(); assert.equal(browser.document.body.getAttribute('data-expanded'), null); assert.equal(browser.elements.expandedExit.hidden, true);
+  assert.equal(browser.document.activeElement, browser.elements.desktopFullscreen, 'Exit must restore the initiating focus');
+  browser.elements.desktopFullscreen.onclick(); let escape = false; browser.emitDocument('keydown', {key: 'Escape', preventDefault() { escape = true; }});
+  assert.equal(escape, true); assert.equal(browser.document.body.getAttribute('data-expanded'), null);
+  browser.elements.desktopFullscreen.onclick(); browser.page('home'); assert.equal(browser.document.body.getAttribute('data-expanded'), null, 'Navigation must exit browser expansion');
+
+  let entered = 0, exited = 0; const native = harness({configure({root, document}) { root.requestFullscreen = () => { entered++; return Promise.resolve(); }; document.exitFullscreen = () => { exited++; return Promise.resolve(); }; }});
+  assert.equal(native.elements.appFullscreen.textContent, 'Full screen'); native.elements.appFullscreen.onclick(); assert.equal(entered, 1);
+  assert.equal(native.elements.appFullscreen.textContent, 'Full screen', 'A request alone must not claim fullscreen succeeded');
+  native.document.fullscreenElement = native.root; native.emitDocument('fullscreenchange'); assert.equal(native.elements.appFullscreen.textContent, 'Exit full screen');
+  native.elements.appFullscreen.onclick(); assert.equal(exited, 1); native.document.fullscreenElement = null; native.emitDocument('fullscreenchange'); assert.equal(native.elements.appFullscreen.textContent, 'Full screen');
+  native.document.fullscreenElement = native.root; native.emitDocument('fullscreenchange'); native.document.exitFullscreen = () => Promise.reject(new Error('Synthetic exit denial'));
+  native.elements.appFullscreen.onclick(); await ready(); assert.match(native.elements.toast.textContent, /Could not exit full screen/); assert.equal(native.elements.appFullscreen.getAttribute('aria-pressed'), 'true');
+  let prefixedEntry = 0, prefixedExit = 0; const prefix = harness({configure({root, document}) { root.webkitRequestFullscreen = () => { prefixedEntry++; }; document.webkitExitFullscreen = () => { prefixedExit++; }; }});
+  prefix.elements.appFullscreen.onclick(); assert.equal(prefixedEntry, 1); prefix.document.webkitFullscreenElement = prefix.root; prefix.emitDocument('webkitfullscreenchange');
+  prefix.elements.appFullscreen.onclick(); assert.equal(prefixedExit, 1);
+  const rejected = harness({configure({root}) { root.requestFullscreen = () => Promise.reject(new Error('Synthetic restriction')); }});
+  rejected.elements.appFullscreen.onclick(); await ready(); assert.match(rejected.elements.toast.textContent, /blocked by the browser/); assert.equal(rejected.elements.appModeHelp.open, true);
+  rejected.page('desktop'); rejected.elements.desktopFrame.requestFullscreen = () => Promise.reject(new Error('Synthetic restriction')); rejected.elements.desktopFullscreen.onclick(); await ready();
+  assert.equal(rejected.document.body.getAttribute('data-expanded'), 'desktop'); assert.match(rejected.elements.toast.textContent, /Expanded within the browser/);
+  rejected.elements.expandedExit.onclick(); rejected.root.requestFullscreen = () => { throw new Error('Synthetic unsupported fullscreen'); };
+  rejected.elements.appFullscreen.onclick(); assert.match(rejected.elements.toast.textContent, /unavailable/);
+  const late = harness(); let rejectLate; late.page('desktop'); late.elements.desktopFrame.requestFullscreen = () => new Promise((_resolve, reject) => { rejectLate = reject; });
+  late.elements.desktopFullscreen.onclick(); late.page('apps'); rejectLate(new Error('Late denial')); await ready(); assert.equal(late.document.body.getAttribute('data-expanded'), null);
+
+  const media = harness(); media.page('comfy'); media.pending('/api/comfy/status').respond({...idleComfy, outputs: [{id: 'image', name: 'Image', type: 'image', previewUrl: '/api/comfy/output/image'}]});
+  const mediaCard = media.elements.comfyOutputs.children[0], imageElement = mediaCard.querySelector('img'); mediaCard.querySelector('button').focus(); mediaCard.querySelector('button').onclick();
+  assert.equal(media.document.body.getAttribute('data-expanded'), 'media'); assert.match(imageElement.className, /browser-expanded/);
+  media.elements.comfyRefresh.onclick(); media.pending('/api/comfy/status').respond(idleComfy); assert.equal(media.elements.comfyOutputs.children[0], mediaCard, 'Polling must preserve expanded media until Exit');
+  media.elements.expandedExit.onclick(); media.elements.comfyRefresh.onclick(); media.pending('/api/comfy/status').respond(idleComfy); assert.match(media.elements.comfyOutputs.textContent, /No recent outputs/);
+  media.elements.comfyRefresh.onclick(); media.pending('/api/comfy/status').respond({...idleComfy, outputs: [{id: 'video', name: 'Video', type: 'video', previewUrl: '/api/comfy/output/video'}]});
+  const videoCard = media.elements.comfyOutputs.children[0], video = videoCard.querySelector('video'); let videoNative = 0;
+  video.webkitEnterFullscreen = () => { videoNative++; }; videoCard.querySelectorAll('button').find(button => button.textContent === 'Full screen').onclick();
+  assert.equal(videoNative, 1); assert.equal(media.document.body.getAttribute('data-expanded'), null, 'Native video player must remain separate from browser expansion');
+  video.webkitEnterFullscreen = null; video.webkitEnterFullScreen = () => { videoNative++; }; videoCard.querySelectorAll('button').find(button => button.textContent === 'Full screen').onclick(); assert.equal(videoNative, 2);
+  const viewportEvents = {}; const viewport = harness({configure({window}) { window.visualViewport = {height: 390.5, offsetTop: 20.6, addEventListener(name, callback) { viewportEvents[name] = callback; }}; }});
+  assert.equal(viewport.root.style['--viewport-top'], '21px'); assert.equal(viewport.root.style['--viewport-height'], '391px'); assert.ok(viewportEvents.scroll);
   console.log('Dashboard UI: polling/history, composer/keyboard, image guards/restoration, model selection, live voice, favourite serialization, desktop and fullscreen passed.');
 }()).catch(error => { console.error(error); process.exitCode = 1; });

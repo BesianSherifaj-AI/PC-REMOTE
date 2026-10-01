@@ -2,6 +2,7 @@
 import http.client
 from http.cookies import SimpleCookie
 import ipaddress
+import io
 import json
 from pathlib import Path
 import socket
@@ -14,6 +15,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import maic_server
+from PIL import Image
 
 
 APP_ID = 'app_' + 'a' * 24
@@ -58,6 +60,8 @@ class UpgradeAPITests(unittest.TestCase):
         vendor.mkdir(parents=True)
         (web / 'index.html').write_text('<!doctype html><title>Test dashboard</title>')
         (web / 'app.js').write_text('window.testDashboard = true;')
+        for filename in ('manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'):
+            (web / filename).write_bytes((cls.original_root / 'web' / filename).read_bytes())
         (vendor / 'rfb.js').write_text('export default {};')
         (cls.root / 'private.js').write_text('private-test-marker')
         cls.server = maic_server.ThreadingHTTPServer(('127.0.0.1', 0), QuietHandler)
@@ -462,6 +466,36 @@ class UpgradeAPITests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers.get('Content-Security-Policy'), "frame-ancestors 'self'")
         self.assertEqual(headers.get('X-Frame-Options'), 'SAMEORIGIN')
+
+    def test_install_assets_are_exact_public_routes_with_valid_manifest_and_icons(self):
+        status, headers, body = self.request('/manifest.webmanifest')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'application/manifest+json')
+        self.assertEqual(headers['Cache-Control'], 'no-store')
+        manifest = json.loads(body)
+        self.assertEqual(manifest['name'], 'PC Remote')
+        self.assertEqual(manifest['display'], 'standalone')
+        self.assertEqual((manifest['start_url'], manifest['scope']), ('/', '/'))
+        self.assertEqual((manifest['theme_color'], manifest['background_color']), ('#f4f5ef', '#f4f5ef'))
+        self.assertEqual([(item['src'], item['sizes']) for item in manifest['icons']],
+                         [('icon-192.png', '192x192'), ('icon-512.png', '512x512')])
+        for filename, size in (('icon-192.png', 192), ('icon-512.png', 512), ('apple-touch-icon.png', 180)):
+            with self.subTest(filename=filename):
+                status, headers, body = self.request('/' + filename)
+                self.assertEqual(status, 200)
+                self.assertEqual(headers['Content-Type'], 'image/png')
+                self.assertEqual(headers['Cache-Control'], 'no-store')
+                self.assertNotIn('Set-Cookie', headers)
+                with Image.open(io.BytesIO(body)) as icon:
+                    self.assertEqual(icon.size, (size, size))
+                    self.assertEqual(icon.format, 'PNG')
+                    self.assertEqual(icon.mode, 'RGB')
+        for path in ('/other.png', '/manifest.json', '/icon-192.png/private.js',
+                     '/%2e%2e/manifest.webmanifest', '/web/icon-192.png'):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(path)[0], 404)
+        self.assertEqual(self.request('/api/pc/apps')[0], 403)
+        self.apps.catalog.assert_not_called()
 
     def test_static_vendor_files_cannot_escape_web_root(self):
         status, _, body = self.request('/desktop/core/rfb.js')

@@ -311,9 +311,10 @@ class Handler(BaseHTTPRequestHandler):
         web = (ROOT / 'web').resolve()
         target = (web / relative).resolve()
         if (web not in target.parents or not target.is_file()
-                or target.suffix.lower() not in ('.html', '.js', '.css', '.svg', '.png', '.jpg', '.ico', '.wav', '.ogg', '.woff', '.woff2')):
+                or target.suffix.lower() not in ('.html', '.js', '.css', '.svg', '.png', '.jpg', '.ico', '.wav', '.ogg', '.woff', '.woff2', '.webmanifest')):
             return self.json(404, {'ok': False, 'message': 'Page not found.'})
-        content_type = 'text/javascript' if target.suffix == '.js' else mimetypes.guess_type(target.name)[0] or 'application/octet-stream'
+        content_type = ({'.js': 'text/javascript', '.webmanifest': 'application/manifest+json'}
+                        .get(target.suffix.lower()) or mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
         cache = {'Cache-Control': 'private, max-age=86400'} if relative.startswith('vendor/novnc/') else None
         self.send(200, content_type, target.read_bytes(), headers=cache)
 
@@ -386,7 +387,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == '/':
             self.send(200, 'text/html; charset=utf-8', (ROOT / 'web' / 'index.html').read_bytes())
-        elif path in ('/app.js', '/voice.js', '/chat-media.js', '/style.css', '/desktop-viewer.html'):
+        elif path in ('/app.js', '/voice.js', '/chat-media.js', '/style.css', '/desktop-viewer.html',
+                      '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'):
             self.static_file(path[1:])
         elif path.startswith('/desktop/'):
             if not self.control_allowed():
