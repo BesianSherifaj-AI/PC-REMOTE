@@ -497,7 +497,7 @@ class VideoPreviewTests(unittest.TestCase):
             first = self.preview.get(self.reference)
             self.assertEqual(self.preview.get(self.reference), first)
             self.assertEqual(call.call_count, 1)
-        self.assertTrue(first.is_relative_to(Path(self.directory.name)))
+        self.assertTrue(first.is_relative_to(Path(self.directory.name).resolve()))
         for headers in [{'Content-Range': 'bytes 1-1/4096'}, {'Content-Range': 'bytes 0-0/' + str(media.MAX_SOURCE_BYTES + 1)}]:
             self.preview.fetch = lambda *args, **kwargs: Response(b'x', 206, headers)
             with self.assertRaises(ValueError):
