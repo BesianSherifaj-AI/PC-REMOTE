@@ -50,7 +50,7 @@ body [hidden]{display:none!important}
 }
 @media(max-width:340px){#toolbar,#scroll{grid-template-columns:repeat(3,minmax(0,1fr))}#fullscreen{grid-column:auto}#zoomControls button{padding:6px}}
 </style></head><body>
-<div id="toolbar" role="group" aria-label="Desktop mode and controls"><button id="control" type="button" aria-pressed="true" title="One finger controls Windows; two fingers pan and pinch-zoom.">Control</button><button id="pan" type="button" aria-pressed="false" title="One-finger panning; Windows input is blocked.">Pan only</button><button id="viewOnly" type="button" aria-pressed="false">View only</button><button id="scale" type="button" aria-pressed="true">Fit screen</button><button id="keyboard" type="button">Keyboard</button><button id="scrollToggle" type="button">Scroll / keys</button><button id="fullscreen" type="button">Full / exit screen</button></div>
+<div id="toolbar" role="group" aria-label="Desktop mode and controls"><button id="control" type="button" aria-pressed="true" title="One finger controls Windows; two fingers pan and pinch-zoom.">Control</button><button id="pan" type="button" aria-pressed="false" title="One-finger panning; Windows input is blocked.">Pan only</button><button id="viewOnly" type="button" aria-pressed="false">View only</button><button id="scale" type="button" aria-pressed="true">Fit screen</button><button id="keyboard" type="button">Keyboard</button><button id="scrollToggle" type="button">Scroll / keys</button><button id="fullscreen" type="button" aria-pressed="false">Expand view</button></div>
 <div id="zoomControls"><button id="zoomOut" aria-label="Zoom out">−</button><span id="zoomLevel">Fit</span><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomActual" title="Show desktop at its original size">100%</button><button id="quality" aria-pressed="false" title="Switch between responsive and sharper images">Fast</button><span id="gestureHint">One finger controls Windows; two fingers pan and pinch this view.</span></div>
 <form id="typing" hidden><input id="keys" aria-label="Text to type on Windows" autocomplete="off" autocapitalize="off" placeholder="Text for focused PC field"><button type="submit">Type</button></form>
 <div id="scroll" hidden><button data-wheel="-120" title="Scroll at the last point touched on the desktop">Scroll ↑</button><button data-wheel="120" title="Scroll at the last point touched on the desktop">Scroll ↓</button><button data-key="65307">Esc</button><button data-key="65289">Tab</button><button data-key="65293">Enter</button><button data-key="65288">⌫</button><button id="rightClick">Right click</button><button data-chord="copy">Ctrl+C</button><button data-chord="paste">Ctrl+V</button><button data-chord="switch">Alt+Tab</button><button id="cad">Ctrl Alt Del</button></div>
@@ -63,6 +63,7 @@ let fitMode = true;
 let mode = 'control';
 let connectionState = 'connecting';
 let connectionId = null;
+let viewerExpanded = false;
 let suspended = false;
 let activeTouchIds = new Set();
 let interruptedTouchIds = new Set();
@@ -260,6 +261,14 @@ function wheel(delta) {
 }
 window.addEventListener('message', event => {
   if (event.origin !== location.origin || event.source !== parent || !event.data) return;
+  if (event.data.type === 'maic-viewer-display') {
+    if (typeof event.data.connectionId !== 'number' || !Number.isFinite(event.data.connectionId) || event.data.connectionId !== connectionId || typeof event.data.expanded !== 'boolean') return;
+    viewerExpanded = event.data.expanded;
+    const button = document.getElementById('fullscreen');
+    button.textContent = viewerExpanded ? 'Exit view' : 'Expand view';
+    button.setAttribute('aria-pressed', String(viewerExpanded));
+    return;
+  }
   if (event.data.type === 'maic-viewer-suspend' || event.data.type === 'maic-viewer-resume') {
     if (!rfb || event.data.connectionId !== undefined && event.data.connectionId !== connectionId) return;
     interruptedTouchIds = new Set(activeTouchIds); releaseInput(true); suspended = event.data.type === 'maic-viewer-suspend'; syncNativeInput(); syncViewControls(); return;
@@ -301,7 +310,7 @@ document.getElementById('zoomActual').onclick = () => { if (rfb) { flushView(); 
 document.getElementById('quality').onclick = function () { if (!rfb) return; const sharp = this.getAttribute('aria-pressed') !== 'true'; rfb.qualityLevel = sharp ? 8 : 4; this.setAttribute('aria-pressed', String(sharp)); this.textContent = sharp ? 'Sharp' : 'Fast'; };
 document.getElementById('keyboard').onclick = () => { if (!canInput()) return; const form = document.getElementById('typing'); form.hidden = !form.hidden; if (!form.hidden) document.getElementById('keys').focus(); };
 document.getElementById('scrollToggle').onclick = () => { const bar = document.getElementById('scroll'); bar.hidden = !bar.hidden; };
-document.getElementById('fullscreen').onclick = () => parent.postMessage({type: 'maic-viewer-fullscreen'}, location.origin);
+document.getElementById('fullscreen').onclick = () => parent.postMessage({type: 'maic-viewer-fullscreen', expanded: !viewerExpanded, connectionId}, location.origin);
 document.querySelectorAll('[data-key]').forEach(button => { button.onclick = () => key(Number(button.getAttribute('data-key'))); });
 document.querySelectorAll('[data-wheel]').forEach(button => { button.onclick = () => wheel(Number(button.getAttribute('data-wheel'))); });
 document.getElementById('cad').onclick = () => { if (canInput()) rfb.sendCtrlAltDel(); };

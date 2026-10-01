@@ -30,6 +30,8 @@ function harness(https = false) {
   }
   for (const id of ['screen', 'status', 'control', 'scale', 'pan', 'viewOnly', 'rightClick', 'zoomLevel', 'gestureHint', 'zoomIn', 'zoomOut', 'zoomActual', 'quality', 'typing', 'keys', 'keyboard', 'scrollToggle', 'scroll', 'fullscreen', 'cad']) elements[id] = new Element();
   elements.quality.setAttribute('aria-pressed', 'false');
+  elements.fullscreen.textContent = 'Expand view';
+  elements.fullscreen.setAttribute('aria-pressed', 'false');
   const canvas = new Element(), viewport = {clientWidth: 1024, clientHeight: 420, style: {}, _left: 0, _top: 0};
   Object.defineProperties(viewport, {
     scrollLeft: {get() { return this._left; }, set(value) { this._left = Math.max(0, Math.min(Math.max(0, 1920 * current._display.scale - this.clientWidth), value)); }},
@@ -86,6 +88,8 @@ function harness(https = false) {
 function close(actual, expected) { assert.ok(Math.abs(actual - expected) < 0.0001, actual + ' != ' + expected); }
 
 const test = harness();
+test.message({type: 'maic-viewer-display', expanded: true, connectionId: 42});
+assert.equal(test.elements.fullscreen.textContent, 'Expand view', 'Display state before a connection must be ignored');
 test.message({type: 'maic-viewer-connect', port: 8841}, 'https://unrelated.example');
 assert.equal(test.rfb(), undefined);
 test.message({type: 'maic-viewer-connect', port: 9000});
@@ -128,7 +132,38 @@ close(rfb._display.scale, 420 / 1080); assert.equal(test.elements.pan.getAttribu
 assert.equal(test.viewport.scrollLeft, 0); assert.equal(test.viewport.scrollTop, 0);
 test.elements.zoomOut.onclick(); close(rfb._display.scale, 420 / 1080, 'Zoom out should stop at Fit');
 test.elements.quality.onclick(); assert.equal(rfb.qualityLevel, 8); test.elements.quality.onclick(); assert.equal(rfb.qualityLevel, 4);
-test.elements.fullscreen.onclick(); assert.equal(test.sent[test.sent.length - 1].message.type, 'maic-viewer-fullscreen');
+test.message({type: 'maic-viewer-display', expanded: false, connectionId: 42});
+const fullButton = test.elements.fullscreen;
+assert.equal(fullButton.textContent, 'Expand view');
+assert.equal(fullButton.getAttribute('aria-pressed'), 'false');
+function expectDisplayRequest(expanded) {
+  fullButton.onclick();
+  const sent = test.sent[test.sent.length - 1];
+  assert.equal(sent.message.type, 'maic-viewer-fullscreen');
+  assert.equal(sent.message.expanded, expanded);
+  assert.equal(sent.message.connectionId, 42);
+  assert.equal(sent.origin, 'http://192.0.2.10:8840');
+  assert.notEqual(fullButton.disabled, true, 'Expand/exit must remain available');
+}
+expectDisplayRequest(true); expectDisplayRequest(true);
+assert.equal(fullButton.getAttribute('aria-pressed'), 'false', 'Repeated clicks request the desired state until the parent confirms it');
+test.message({type: 'maic-viewer-display', expanded: true, connectionId: 42}, 'https://unrelated.example');
+test.message({type: 'maic-viewer-display', expanded: true, connectionId: 42}, undefined, {});
+for (const connectionId of [undefined, null, 43, '42', NaN, Infinity]) test.message({type: 'maic-viewer-display', expanded: true, connectionId});
+for (const expanded of [undefined, 1, 'true', null]) test.message({type: 'maic-viewer-display', expanded, connectionId: 42});
+assert.equal(fullButton.textContent, 'Expand view', 'Spoofed, stale or malformed acknowledgements must not change the control');
+for (let cycle = 0; cycle < 3; cycle++) {
+  test.message({type: 'maic-viewer-display', expanded: true, connectionId: 42});
+  assert.equal(fullButton.textContent, 'Exit view');
+  assert.equal(fullButton.getAttribute('aria-pressed'), 'true');
+  test.message({type: 'maic-viewer-display', expanded: false, connectionId: 41});
+  assert.equal(fullButton.textContent, 'Exit view', 'A stale exit acknowledgement must be ignored');
+  expectDisplayRequest(false); expectDisplayRequest(false);
+  test.message({type: 'maic-viewer-display', expanded: false, connectionId: 42});
+  assert.equal(fullButton.textContent, 'Expand view');
+  assert.equal(fullButton.getAttribute('aria-pressed'), 'false');
+  expectDisplayRequest(true);
+}
 test.elements.control.onclick();
 test.elements.keys.value = 'A😀'; test.elements.typing.onsubmit({preventDefault() {}});
 assert.deepEqual(rfb.keys, [65, 0x0101f600]);

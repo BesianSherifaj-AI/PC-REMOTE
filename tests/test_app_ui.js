@@ -90,7 +90,7 @@ function harness({hash = '', standalone = false, displayMode = false, configure}
   pending('/api/control-session').respond({ok: true, token: 'synthetic-memory-session', canManageDevices: false});
   function page(name) { nav.find(button => button.getAttribute('data-page') === name).onclick(); }
   function models(value) { pending('/api/lm/models').respond(value); }
-  function message(data) { windowEvents.message.forEach(callback => callback({data, origin: location.origin, source: elements.viewer.contentWindow})); }
+  function message(data, origin = location.origin, source = elements.viewer.contentWindow) { windowEvents.message.forEach(callback => callback({data, origin, source})); }
   return {elements, requests, timers, intervals, document, root, sent, page, pending, models, message, voice, attachments, reader,
     emitDocument(name, event = {}) { documentEvents[name].forEach(callback => callback(event)); },
     navigateHash(value) { location.hash = value; windowEvents.hashchange.forEach(callback => callback()); },
@@ -371,10 +371,10 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
   assert.equal(silentRoot.elements.appFullscreen.textContent, 'Full screen'); activationWatchdog(silentRoot).fn(); assert.equal(silentRoot.elements.appModeHelp.open, true);
   assert.equal(silentRoot.elements.appFullscreen.getAttribute('aria-pressed'), 'false', 'A silently ignored request must not report native fullscreen');
   const resolved = harness({configure({elements}) { elements.desktopFrame.requestFullscreen = () => Promise.resolve(); }}); resolved.page('desktop'); resolved.elements.desktopFullscreen.onclick(); await ready();
-  assert.equal(resolved.document.body.getAttribute('data-expanded'), null); activationWatchdog(resolved).fn(); assert.equal(resolved.document.body.getAttribute('data-expanded'), 'desktop', 'A resolved promise without native activation must reach browser expansion');
+  assert.equal(resolved.document.body.getAttribute('data-expanded'), 'desktop', 'Desktop expansion must be immediate, before native fullscreen responds'); activationWatchdog(resolved).fn(); assert.equal(resolved.document.body.getAttribute('data-expanded'), 'desktop', 'A resolved promise without native activation must retain browser expansion');
   resolved.document.fullscreenElement = resolved.elements.desktopFrame; resolved.emitDocument('fullscreenchange'); assert.equal(resolved.document.body.getAttribute('data-expanded'), null, 'Late actual native success must clear overlapping browser expansion');
   const errors = harness({configure({elements}) { elements.desktopFrame.webkitRequestFullscreen = function () {}; }}); errors.page('desktop'); errors.elements.desktopFullscreen.onclick();
-  const errorWatchdog = activationWatchdog(errors); errors.emitDocument('webkitfullscreenerror', {target: errors.elements.chatInput}); assert.equal(errors.document.body.getAttribute('data-expanded'), null);
+  const errorWatchdog = activationWatchdog(errors); errors.emitDocument('webkitfullscreenerror', {target: errors.elements.chatInput}); assert.ok(Array.from(errors.timers.values()).includes(errorWatchdog));
   errors.emitDocument('webkitfullscreenerror', {target: errors.elements.desktopFrame}); assert.equal(errors.document.body.getAttribute('data-expanded'), 'desktop');
   assert.ok(!Array.from(errors.timers.values()).includes(errorWatchdog)); errors.elements.expandedExit.onclick(); errorWatchdog.fn(); assert.equal(errors.document.body.getAttribute('data-expanded'), null, 'A stale watchdog after user Exit must not reopen expansion');
   errors.elements.desktopFullscreen.onclick(); const navigationWatchdog = activationWatchdog(errors); errors.page('home'); navigationWatchdog.fn(); errors.emitDocument('fullscreenerror', {target: errors.elements.desktopFrame});
@@ -382,12 +382,43 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
   const trueState = harness({configure({elements}) { elements.desktopFrame.requestFullscreen = function () {}; }}); trueState.page('desktop'); trueState.elements.desktopFullscreen.onclick();
   trueState.document.fullscreenElement = trueState.elements.desktopFrame; trueState.emitDocument('fullscreenerror', {target: trueState.elements.desktopFrame});
   assert.equal(trueState.document.body.getAttribute('data-expanded'), null, 'An error event must check genuine native state before falling back');
-  let directNativeCalls = 0; const direct = harness({configure({elements}) { elements.desktopFrame.requestFullscreen = () => { directNativeCalls++; }; }});
-  direct.page('desktop'); direct.elements.desktopBrowserExpand.onclick(); assert.equal(directNativeCalls, 0); assert.equal(direct.document.body.getAttribute('data-expanded'), 'desktop');
-  assert.equal(direct.elements.desktopBrowserExpand.getAttribute('aria-pressed'), 'true'); assert.equal(direct.elements.desktopBrowserExpand.textContent, 'Exit expanded view');
-  direct.elements.desktopBrowserExpand.onclick(); assert.equal(direct.document.body.getAttribute('data-expanded'), null); assert.equal(direct.elements.desktopBrowserExpand.textContent, 'Fill browser');
-  direct.elements.desktopFullscreen.onclick(); const directWatchdog = activationWatchdog(direct); direct.elements.desktopBrowserExpand.onclick(); direct.elements.expandedExit.onclick(); directWatchdog.fn();
-  assert.equal(directNativeCalls, 1); assert.equal(direct.document.body.getAttribute('data-expanded'), null, 'Direct browser expansion must invalidate a pending native request');
+  function connectedViewer(options) {
+    const test = harness(options); test.page('desktop'); test.elements.desktopConnect.onclick();
+    test.pending('/api/control-session').respond({ok: true, token: 'synthetic-view-session'});
+    test.pending('/api/desktop/session').respond({ok: true, credentials: {}, port: 8841}); test.message({type: 'maic-viewer-ready'});
+    test.connectionId = test.sent.find(item => item.data.type === 'maic-viewer-connect').data.connectionId;
+    test.display = () => test.sent.filter(item => item.data.type === 'maic-viewer-display').at(-1).data;
+    test.requestView = expanded => test.message({type: 'maic-viewer-fullscreen', expanded, connectionId: test.connectionId});
+    return test;
+  }
+  const iosView = connectedViewer(); assert.equal(iosView.display().expanded, false);
+  const viewerSource = iosView.elements.viewer.src, viewRequests = iosView.requests.length;
+  iosView.requestView(true); assert.equal(iosView.document.body.getAttribute('data-expanded'), 'desktop'); assert.equal(iosView.display().expanded, true);
+  assert.equal(iosView.elements.desktopFullscreen.textContent, 'Exit view'); assert.equal(iosView.elements.expandedExit.textContent, 'Exit view');
+  iosView.requestView(true); assert.equal(iosView.display().expanded, true, 'Repeated enter requests must not accidentally exit');
+  iosView.requestView(false); assert.equal(iosView.document.body.getAttribute('data-expanded'), null); assert.equal(iosView.display().expanded, false);
+  iosView.requestView(false); assert.equal(iosView.display().expanded, false, 'Repeated exits must not reopen');
+  iosView.elements.desktopFullscreen.onclick(); assert.equal(iosView.display().expanded, true, 'Outer controls must update the iframe state');
+  iosView.elements.expandedExit.onclick(); assert.equal(iosView.display().expanded, false);
+  assert.equal(iosView.elements.viewer.src, viewerSource); assert.equal(iosView.requests.length, viewRequests, 'Expanding and exiting must preserve the existing desktop session');
+  const command = {type: 'maic-viewer-fullscreen', expanded: true, connectionId: iosView.connectionId};
+  iosView.message(command, 'https://wrong.invalid'); iosView.message(command, undefined, {});
+  iosView.message({...command, connectionId: -1}); iosView.message({type: command.type});
+  assert.equal(iosView.document.body.getAttribute('data-expanded'), null, 'Spoofed, stale and unversioned commands must not expand the desktop');
+  iosView.page('home'); iosView.message(command); assert.equal(iosView.document.body.getAttribute('data-expanded'), null, 'A delayed viewer command must not expand a hidden Desktop page');
+  iosView.page('desktop'); iosView.elements.desktopDisconnect.onclick(); iosView.message(command); assert.equal(iosView.document.body.getAttribute('data-expanded'), null);
+  const pendingView = connectedViewer({configure({elements}) { elements.desktopFrame.requestFullscreen = function () {}; }});
+  pendingView.requestView(true); const viewWatchdog = activationWatchdog(pendingView); pendingView.requestView(false); viewWatchdog.fn();
+  assert.equal(pendingView.document.body.getAttribute('data-expanded'), null, 'Exit must cancel an unresolved native request fallback');
+  const rootFullscreen = connectedViewer(); rootFullscreen.document.fullscreenElement = rootFullscreen.root;
+  rootFullscreen.requestView(true); assert.equal(rootFullscreen.document.body.getAttribute('data-expanded'), 'desktop');
+  rootFullscreen.requestView(false); assert.equal(rootFullscreen.document.fullscreenElement, rootFullscreen.root, 'Exit view restores the dashboard within existing app fullscreen');
+  let desktopNativeExits = 0;
+  const nativeViewer = connectedViewer({configure({document}) { document.exitFullscreen = () => { desktopNativeExits++; }; }});
+  nativeViewer.document.fullscreenElement = nativeViewer.elements.desktopFrame; nativeViewer.emitDocument('fullscreenchange');
+  assert.equal(nativeViewer.display().expanded, true); nativeViewer.requestView(false); assert.equal(desktopNativeExits, 1);
+  nativeViewer.document.fullscreenElement = null; nativeViewer.emitDocument('fullscreenchange'); assert.equal(nativeViewer.display().expanded, false);
+  nativeViewer.document.fullscreenElement = nativeViewer.elements.desktopFrame; nativeViewer.page('apps'); assert.equal(desktopNativeExits, 2, 'Leaving Desktop must exit native viewer fullscreen');
 
   const media = harness(); media.page('comfy'); media.pending('/api/comfy/status').respond({...idleComfy, outputs: [{id: 'image', name: 'Image', type: 'image', previewUrl: '/api/comfy/output/image'}]});
   const mediaCard = media.elements.comfyOutputs.children[0], imageElement = mediaCard.querySelector('img'); mediaCard.querySelector('button').focus(); mediaCard.querySelector('button').onclick();

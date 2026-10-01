@@ -76,9 +76,9 @@ The current address is also stored in `.runtime/server.url`. `localhost` on the 
 
 On iPhone, open your dashboard's secure HTTPS address in **Safari**, choose **Share → Add to Home Screen**, enable **Open as Web App** if offered, then tap **Add**. Launch the new PC Remote icon to open it without Safari's address bar. This is the supported app-style view when iPhone Safari does not offer page fullscreen. [Apple's Home Screen instructions](https://support.apple.com/guide/iphone/iphea86e5236/ios).
 
-On a PC browser, **Full screen** requests native fullscreen; press **Esc** or use the exit control to return. **Expand desktop** focuses the viewer. Browser permissions and platform support still apply.
+On a PC browser, **Full screen** requests native fullscreen; press **Esc** or use the exit control to return. **Expand view** focuses the viewer. Browser permissions and platform support still apply.
 
-If a fullscreen button has no effect, use **Desktop → Fill browser**. This immediately fills the available browser area without relying on the Fullscreen API; **Exit expanded view** returns to the dashboard. Safari's own bars can remain visible in a normal tab. Use the Home Screen steps above to remove those bars. Desktop fullscreen requests that fail or never activate now fall back automatically.
+Use **Desktop → Expand view** to hide the dashboard immediately. The button inside the viewer changes to **Exit view** and returns to the dashboard without disconnecting. Native fullscreen is used when the browser permits it; the desktop still expands inside the browser when it does not. On iPhone, Safari’s bars can remain in a normal tab. Use the Home Screen steps above for a view without those bars. Installing the app is a Safari action and cannot be done automatically by the page.
 
 The installed web app may keep separate browser storage. If it shows **Connect to your PC**, request connection and approve that installation from the Windows PC's local dashboard. Installing the icon does not grant access or bypass pairing. The PC must stay online; installation does not provide offline desktop access.
 

@@ -60,6 +60,7 @@
   }
   function showPage(name) {
     fullscreenGeneration++; cancelFullscreenRequest(); exitExpanded(false);
+    if (nativeFullscreen() && nativeFullscreen() !== document.documentElement) { exitNativeFullscreen(); }
     if (['home', 'apps', 'desktop', 'chat', 'comfy'].indexOf(name) < 0) { name = 'home'; }
     page = name; each('.page', function (item) { item.hidden = item.id !== page; });
     document.body.setAttribute('data-page', name);
@@ -345,13 +346,18 @@
     if (!pendingFullscreen) { return; } var request = pendingFullscreen; pendingFullscreen = null; clearTimeout(request.timer);
     if (request.videoHandler) { request.target.removeEventListener('webkitbeginfullscreen', request.videoHandler); }
   }
+  function desktopExpanded() { return expandedTarget === el('desktopFrame') || nativeFullscreen() === el('desktopFrame'); }
+  function syncViewerDisplay() {
+    if (desktopWanted && el('viewer').src && el('viewer').src !== 'about:blank') {
+      el('viewer').contentWindow.postMessage({type: 'maic-viewer-display', expanded: desktopExpanded(), connectionId: desktopGeneration}, location.origin);
+    }
+  }
   function fullscreenChanged() {
     if (pendingFullscreen && fullscreenActive(pendingFullscreen)) { cancelFullscreenRequest(); }
     if (expandedTarget && nativeFullscreen() === expandedTarget) { exitExpanded(false); }
     var active = nativeFullscreen(), appMode = !fullscreenMethod(document.documentElement);
     text('appFullscreen', active ? 'Exit full screen' : appMode ? 'App mode' : 'Full screen'); el('appFullscreen').setAttribute('aria-pressed', String(!!active));
-    text('desktopFullscreen', expandedTarget === el('desktopFrame') ? 'Exit expanded view' : active === el('desktopFrame') ? 'Exit desktop' : 'Expand desktop'); el('desktopFullscreen').setAttribute('aria-pressed', String(active === el('desktopFrame') || expandedTarget === el('desktopFrame'))); sizeChrome();
-    text('desktopBrowserExpand', expandedTarget === el('desktopFrame') ? 'Exit expanded view' : 'Fill browser'); el('desktopBrowserExpand').setAttribute('aria-pressed', String(expandedTarget === el('desktopFrame')));
+    text('desktopFullscreen', desktopExpanded() ? 'Exit view' : 'Expand view'); el('desktopFullscreen').setAttribute('aria-pressed', String(desktopExpanded())); sizeChrome(); syncViewerDisplay();
   }
   function exitExpanded(restoreFocus) {
     if (!expandedTarget) { return; } var previous = expansionFocus;
@@ -360,9 +366,10 @@
     if (restoreFocus !== false && previous && previous.isConnected !== false && previous.focus) { previous.focus(); }
   }
   function expandInBrowser(target) {
+    if (expandedTarget === target) { return; }
     var previous = document.activeElement; exitExpanded(false); expandedTarget = target; expansionFocus = previous;
     target.className = (target.className + ' browser-expanded').trim(); document.body.setAttribute('data-expanded', target === el('desktopFrame') ? 'desktop' : 'media');
-    el('expandedExit').hidden = false; el('expandedExit').textContent = 'Exit expanded view'; el('expandedExit').focus(); fullscreenChanged();
+    el('expandedExit').hidden = false; el('expandedExit').textContent = target === el('desktopFrame') ? 'Exit view' : 'Exit expanded view'; el('expandedExit').focus(); fullscreenChanged();
   }
   function showAppModeHelp(blocked) {
     showPage('home'); var help = el('appModeHelp'), status = document.getElementById('appModeStatus');
@@ -383,7 +390,7 @@
     function failed(unavailable) {
       if (generation !== fullscreenGeneration) { return; }
       if (target === document.documentElement) { showAppModeHelp(true); toast(unavailable ? 'Full screen is unavailable in this browser. Use App mode below.' : 'Full screen was blocked by the browser. See App mode below.'); }
-      else { expandInBrowser(target); toast('Expanded within the browser. Use Exit expanded view to return.'); }
+      else { expandInBrowser(target); toast(target === el('desktopFrame') ? 'Expanded within the browser. Use Exit view to return.' : 'Expanded within the browser. Use Exit expanded view to return.'); }
     }
     try {
       var method = fullscreenMethod(target), video = !method && target.tagName === 'VIDEO' && (target.webkitEnterFullscreen || target.webkitEnterFullScreen);
@@ -401,7 +408,20 @@
       else if (result && result.catch) { result.catch(function () { request.check(true, false); }); }
     } catch (error) { cancelFullscreenRequest(); failed(true); }
   }
-  function toggleDesktopFullscreen() { toggleFullscreen(el('desktopFrame')); }
+  function setDesktopExpanded(wanted) {
+    if (wanted === desktopExpanded()) { syncViewerDisplay(); return; }
+    var frame = el('desktopFrame');
+    if (!wanted) {
+      fullscreenGeneration++; cancelFullscreenRequest(); exitExpanded();
+      if (nativeFullscreen() === frame) { exitNativeFullscreen(); }
+      return;
+    }
+    // The view changes immediately, even when a mobile browser ignores native
+    // fullscreen. Keep the iframe mounted so the desktop session survives.
+    if (!nativeFullscreen()) { toggleFullscreen(frame); }
+    if (nativeFullscreen() !== frame) { expandInBrowser(frame); }
+  }
+  function toggleDesktopFullscreen() { setDesktopExpanded(!desktopExpanded()); }
   function updateDesktopControls() {
     el('desktopConnect').disabled = desktopState === 'connecting';
     el('desktopConnectEmpty').disabled = desktopState === 'connecting';
@@ -440,19 +460,20 @@
   el('desktopConnect').onclick = el('desktopConnectEmpty').onclick = function () { startDesktop(true); };
   window.addEventListener('message', function (event) {
     if (event.origin !== window.location.origin || event.source !== el('viewer').contentWindow) { return; }
-    if (event.data && event.data.type === 'maic-viewer-ready' && desktopCredentials && desktopCredentials.credentials) { event.source.postMessage({type: 'maic-viewer-connect', credentials: desktopCredentials.credentials, port: desktopCredentials.port, connectionId: desktopGeneration, mode: desktopMode}, window.location.origin); desktopCredentials.credentials = null; }
+    if (event.data && event.data.type === 'maic-viewer-ready' && desktopCredentials && desktopCredentials.credentials) { event.source.postMessage({type: 'maic-viewer-connect', credentials: desktopCredentials.credentials, port: desktopCredentials.port, connectionId: desktopGeneration, mode: desktopMode}, window.location.origin); desktopCredentials.credentials = null; syncViewerDisplay(); }
     if (event.data && event.data.type === 'maic-viewer-status' && event.data.connectionId === desktopGeneration) {
       if (['control', 'pan', 'view'].indexOf(event.data.mode) >= 0) { desktopMode = event.data.mode; }
       text('desktopMessage', event.data.message);
       if (event.data.state === 'connected') { desktopState = 'connected'; desktopRetry = 0; clearTimeout(desktopWatchdog); updateDesktopControls(); if (page !== 'desktop' || document.hidden) { event.source.postMessage({type: 'maic-viewer-suspend', connectionId: desktopGeneration}, location.origin); } }
       if (event.data.state === 'disconnected') { desktopState = 'disconnected'; clearTimeout(desktopWatchdog); updateDesktopControls(); scheduleDesktopRetry(); }
     }
-    if (event.data && event.data.type === 'maic-viewer-fullscreen') { toggleDesktopFullscreen(); }
+    if (event.data && event.data.type === 'maic-viewer-fullscreen' && desktopWanted && page === 'desktop') {
+      if (event.data.connectionId === desktopGeneration && typeof event.data.expanded === 'boolean') { setDesktopExpanded(event.data.expanded); }
+    }
   });
   el('desktopDisconnect').onclick = disconnectDesktop;
   el('desktopFullscreen').onclick = toggleDesktopFullscreen;
   el('appFullscreen').onclick = function () { toggleFullscreen(document.documentElement); };
-  el('desktopBrowserExpand').onclick = function () { fullscreenGeneration++; cancelFullscreenRequest(); if (expandedTarget === el('desktopFrame')) { exitExpanded(); } else { expandInBrowser(el('desktopFrame')); } };
   el('expandedExit').onclick = function () { fullscreenGeneration++; cancelFullscreenRequest(); exitExpanded(); };
   document.addEventListener('keydown', function (event) { if (event.key === 'Escape' || event.keyCode === 27) { fullscreenGeneration++; cancelFullscreenRequest(); if (expandedTarget) { event.preventDefault(); exitExpanded(); } } });
   el('desktopAutoReconnect').onchange = function () { if (!this.checked) { clearTimeout(desktopRetryTimer); } else if (desktopState === 'disconnected') { desktopRetry = 0; scheduleDesktopRetry(); } };
