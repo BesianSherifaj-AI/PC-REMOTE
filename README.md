@@ -84,6 +84,30 @@ The installed web app may keep separate browser storage. If it shows **Connect t
 
 ## Local AI, images, and speech
 
+Home also includes fixed Windows shortcuts (Settings, Display, Sound, Bluetooth, Network, Task Manager, Files and Downloads), device time, and optional **Keep screen awake**. Wake lock needs a supported HTTPS browser, applies only while the page is visible, and does not keep the Windows PC awake. Unsupported browsers keep all other controls.
+
+### Optional agent team
+
+The **Agents** page connects through the PC to an existing local OpenClaw/Hermes Team Hub at `127.0.0.1:18800`. It supports the hub's four IDs: `hermes`, `main`, `rion_local`, and `rios`. Configure `.runtime/agent-team.json` locally:
+
+```json
+{"enabled": true, "tokenFile": "C:\\path\\to\\hub.token"}
+```
+
+The token stays on the PC; never commit it or the private configuration. The adapter expects authenticated `/api/state` and `/api/messages`, with the human sender ID `besian`. It does not install/start gateways, load models, or send Telegram notifications. Roles and availability come from the actual hub. Avatar motion is a visual indication of service/task state, not an inferred emotion. The small local character assets are [Kenney Monster Builder Pack](https://kenney.nl/assets/monster-builder-pack), CC0; attribution and the original license are in `web/agent-avatars/`.
+
+Choose an agent and press **Send to agent** to dispatch a message or task using its configured PC tools. Only conversations submitted through PC Remote are returned to this page; unrelated hub history, shared facts and credentials are not forwarded. Conversations stay in browser memory, and receipt mappings expire after 24 hours or a server restart. Clearing the conversation does not cancel a running task. Uncertain sends are never retried automatically.
+
+### ComfyUI saved output library
+
+Choose **ComfyUI → All saved outputs** to browse older files, including files no longer in ComfyUI's job history. Configure the actual output directory of the ComfyUI instance on port 8010 in `.runtime/comfy-library.json`:
+
+```json
+{"outputRoot": "C:\\ComfyUI\\output"}
+```
+
+Browse folders, search filenames/folder names, filter images/videos, and page through 24 results at a time, newest first. **Open output folder on PC** requests Windows Explorer at that configured root. Files are read only: there are no delete, upload, workflow submission or queue interruption actions. Folder/media IDs are server-owned; symbolic links and reparse points are excluded. Scans are cached for 20 seconds and bounded to 20,000 entries/3 seconds; a partial scan is reported. Keep ComfyUI on 8010 running for previews, which retain the existing compatible video conversion and size limits. The protected endpoint on 8787 is not used.
+
 LM Studio is reached only by the PC backend at `127.0.0.1:1234`. In Chat, select a loaded model from the model bar above the conversation. Expand **Model settings** to open LM Studio, start its localhost API, or load an already installed model. These controls stay collapsed during ordinary chat. Model selection is explicit; the dashboard never substitutes a different model or downloads one automatically.
 
 Type your message and press **Send**, or **Ctrl+Enter** / **Cmd+Enter**. Enter on its own adds a new line. **Stop** cancels generation; **New chat** clears the current conversation and attachments. Chat stays in browser memory; reloading clears it. Existing LM Studio desktop conversations are not imported.

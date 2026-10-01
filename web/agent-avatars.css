@@ -1,0 +1,37 @@
+/* Local Kenney CC0 characters. data-state must come from actual agent status.
+   Missing/unknown state stays still; this stylesheet never derives status. */
+.agent-avatar{--agent-color:#84b66f;position:relative;display:inline-block;width:96px;height:96px;flex-shrink:0;vertical-align:middle;border-radius:26px;background:#edf3e6;border:1px solid #dbe6d1;isolation:isolate}
+.agent-avatar--aqua{--agent-color:#76bdb4;background:#e9f3ef;border-color:#d4e6df}
+.agent-avatar--coral{--agent-color:#d78f88;background:#f7eeea;border-color:#ecdad4}
+.agent-avatar--amber{--agent-color:#dfb15f;background:#f7f2e5;border-color:#eadebf}
+.agent-avatar img{display:block;width:100%;height:100%;object-fit:contain;transform-origin:50% 82%}
+.agent-avatar:before{content:"";position:absolute;left:7px;right:7px;top:7px;bottom:7px;border:1px solid transparent;border-radius:22px;pointer-events:none}
+.agent-avatar:after{content:"?";position:absolute;right:-4px;bottom:-3px;display:flex;align-items:center;justify-content:center;width:25px;height:25px;border:3px solid #fff;border-radius:50%;background:#e1e5dc;color:#657263;font:600 13px/1 "Segoe UI",Arial,sans-serif;pointer-events:none}
+.agent-avatar[data-state=idle]:after{content:"";background:#8caa76}
+.agent-avatar[data-state=idle] img{animation:agent-breathe 5s ease-in-out infinite}
+.agent-avatar[data-state=working]:before{border-color:var(--agent-color);animation:agent-ring 2.2s ease-out infinite}
+.agent-avatar[data-state=working]:after{content:"↗";background:#c0ec83;color:#23412b}
+.agent-avatar[data-state=working] img{animation:agent-work 1.35s ease-in-out infinite}
+.agent-avatar[data-state=waiting]:before{border-color:#bac6b2;animation:agent-ring 5s ease-out infinite}
+.agent-avatar[data-state=waiting]:after{content:"···";background:#e5eadd;color:#64755d;font-size:18px;letter-spacing:-1px}
+.agent-avatar[data-state=thinking]:before{border-color:#c7dad4;border-top-color:#527e70;border-right-color:#527e70;animation:agent-orbit 3.6s linear infinite}
+.agent-avatar[data-state=thinking]:after{content:"···";background:#dcece5;color:#426557;font-size:18px;letter-spacing:-1px}
+.agent-avatar[data-state=thinking] img{animation:agent-think 4s ease-in-out infinite}
+.agent-avatar[data-state=attention]:before{border-color:#d5a44d}
+.agent-avatar[data-state=attention]:after{content:"!";background:#f4d599;color:#765311}
+.agent-avatar[data-state=attention] img{animation:agent-attention 4s ease-in-out infinite}
+.agent-avatar[data-state=offline]{background:#eceee8;border-color:#dce0d6}
+.agent-avatar[data-state=offline] img{filter:grayscale(1);opacity:.52}
+.agent-avatar[data-state=offline]:after{content:"–";background:#d9ded3;color:#687260}
+.agent-avatar[data-state=unknown] img{opacity:.72}
+.agent-avatar--small{width:64px;height:64px;border-radius:19px}
+.agent-avatar--small:before{left:4px;right:4px;top:4px;bottom:4px;border-radius:16px}
+.agent-avatar--small:after{width:20px;height:20px;font-size:11px;border-width:2px}
+@keyframes agent-breathe{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-1px) scale(1.015)}}
+@keyframes agent-work{0%,100%{transform:translateY(0) rotate(-1deg)}50%{transform:translateY(-3px) rotate(1deg)}}
+@keyframes agent-think{0%,100%{transform:rotate(0)}35%,65%{transform:rotate(-4deg)}}
+@keyframes agent-attention{0%,12%,100%{transform:rotate(0)}3%,9%{transform:rotate(-4deg)}6%{transform:rotate(4deg)}}
+@keyframes agent-ring{0%{opacity:.75;transform:scale(.94)}80%,100%{opacity:0;transform:scale(1.08)}}
+@keyframes agent-orbit{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.agent-avatar img,.agent-avatar:before{animation:none!important;transform:none!important}}
+@media print{.agent-avatar img,.agent-avatar:before{animation:none!important}}

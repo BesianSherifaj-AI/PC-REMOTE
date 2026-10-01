@@ -27,7 +27,7 @@ jobs:
       - name: Browser behavior
         shell: pwsh
         run: |
-          foreach ($suite in @('test_desktop_viewer.js', 'test_app_ui.js', 'test_voice.js', 'test_chat_media.js')) {
+          foreach ($suite in @('test_desktop_viewer.js', 'test_app_ui.js', 'test_voice.js', 'test_chat_media.js', 'test_companion.js')) {
             node "tests/$suite"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

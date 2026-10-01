@@ -633,6 +633,10 @@ class AIService:
             reference = self._outputs.get(identifier)
         if not reference:
             raise ValueError('Unknown ComfyUI output. Refresh the gallery.')
+        return self.output_reference(reference, range_header)
+
+    def output_reference(self, reference, range_header=None):
+        """Preview a validated server-owned output reference, never a client path."""
         filename, subfolder, kind, content_type = reference
         if kind == 'video':
             range_info = self._range(range_header) if range_header is not None else None

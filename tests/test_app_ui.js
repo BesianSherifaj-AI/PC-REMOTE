@@ -33,7 +33,7 @@ function harness({hash = '', standalone = false, displayMode = false, configure}
   }
   for (const match of html.matchAll(/<([a-z][a-z0-9]*)\b[^>]*\bid="([^"]+)"/gi)) elements[match[2]] = new Element(match[1], match[2]);
   for (const id of ['model', 'availableModel']) { const option = new Element('option'); option.value = ''; elements[id].appendChild(option); }
-  const pages = ['home', 'apps', 'desktop', 'chat', 'comfy'];
+  const pages = ['home', 'apps', 'desktop', 'chat', 'comfy', 'agents'];
   const nav = pages.map(name => { const button = new Element('button'); button.setAttribute('data-page', name); return button; });
   const chrome = new Element(), body = new Element('body'), root = new Element('html');
   const sent = []; elements.viewer.contentWindow = {postMessage(data, origin) { sent.push({data, origin}); }};
@@ -64,7 +64,7 @@ function harness({hash = '', standalone = false, displayMode = false, configure}
     setBusy(value) { this.isBusy = value; attachmentOptions.onChange(); }, sentCount: () => attachmentOptions.sentCount()};
   const reader = {loaded: 0, stopped: 0, spoken: [], ready: () => true, load() { this.loaded++; }, stop() { this.stopped++; },
     speak(value) { this.spoken.push(value); }, ended() { readerOptions.onEnded(); }, fail() { readerOptions.onError(); }};
-  const window = {
+  const window = {createPCCompanion: () => ({connected() {}, onPage() {}, isLibrary: () => false, refreshLibrary() {}}),
     location, scrollTo() {}, matchMedia: () => ({matches: displayMode}), createMaicVoice(options) { voiceOptions = options; return voice; },
     createMaicAttachments(options) { attachmentOptions = options; return attachments; },
     createMaicReader(options) { readerOptions = options; return reader; },

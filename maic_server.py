@@ -18,7 +18,7 @@ import uuid
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie, CookieError
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit, unquote, parse_qs
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / '.runtime' / 'diagnostics'
@@ -299,12 +299,24 @@ class Handler(BaseHTTPRequestHandler):
                     'ok': True, 'enabled': False, 'url': '', 'message': 'Secure remote access is not configured yet.'}
             elif path == '/api/comfy/status':
                 value = self.server.ai_service.comfy_status()
+            elif path == '/api/agents/status':
+                value = self.server.agent_team.status()
+            elif path == '/api/comfy/library':
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                if set(query) - {'folder', 'search', 'media', 'offset', 'limit'} or any(len(v) != 1 for v in query.values()):
+                    raise ValueError('Invalid output library filter.')
+                value = self.server.comfy_library.list_outputs(
+                    folder=query.get('folder', ['root'])[0], search=query.get('search', [''])[0],
+                    media=query.get('media', ['all'])[0], offset=int(query.get('offset', ['0'])[0]),
+                    limit=int(query.get('limit', ['24'])[0]))
             else:
                 bridge = getattr(self.server, 'desktop_bridge', None)
                 value = bridge.status() if bridge else {'ok': True, 'available': False, 'message': 'Desktop viewer is unavailable.'}
-            headers = {'Set-Cookie': self.media_cookie()} if path == '/api/comfy/status' else None
+            headers = {'Set-Cookie': self.media_cookie()} if path in ('/api/comfy/status', '/api/comfy/library') else None
             return self.json(200, value, headers=headers)
-        except (ValueError, RuntimeError, OSError, AttributeError):
+        except ValueError:
+            return self.json(400, {'ok': False, 'message': 'Invalid PC service request.'})
+        except (RuntimeError, OSError, AttributeError):
             return self.json(503, {'ok': False, 'message': 'This PC service is unavailable.'})
 
     def static_file(self, relative):
@@ -387,15 +399,28 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == '/':
             self.send(200, 'text/html; charset=utf-8', (ROOT / 'web' / 'index.html').read_bytes())
-        elif path in ('/app.js', '/voice.js', '/chat-media.js', '/style.css', '/desktop-viewer.html',
+        elif path in ('/app.js', '/voice.js', '/chat-media.js', '/companion.js', '/style.css', '/agent-avatars.css', '/desktop-viewer.html',
                       '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'):
+            self.static_file(path[1:])
+        elif path in ('/agent-avatars/moss.svg', '/agent-avatars/aqua.svg', '/agent-avatars/coral.svg', '/agent-avatars/amber.svg'):
             self.static_file(path[1:])
         elif path.startswith('/desktop/'):
             if not self.control_allowed():
                 return self.json(403, {'ok': False})
             self.static_file('vendor/novnc/' + unquote(path[len('/desktop/'):]))
-        elif path in ('/api/pc/apps', '/api/pc/state', '/api/hardware', '/api/lm/models', '/api/speech/status', '/api/tts/status', '/api/remote/info', '/api/remote/status', '/api/comfy/status', '/api/desktop/status'):
+        elif path in ('/api/pc/apps', '/api/pc/state', '/api/hardware', '/api/lm/models', '/api/speech/status', '/api/tts/status', '/api/remote/info', '/api/remote/status', '/api/comfy/status', '/api/desktop/status', '/api/agents/status', '/api/comfy/library'):
             self.private_get(path)
+        elif path.startswith('/api/comfy/library/output/'):
+            if not self.media_authenticated():
+                return self.json(403, {'ok': False})
+            try:
+                reference = self.server.comfy_library.reference(path.rsplit('/', 1)[1])
+                result = self.server.ai_service.output_reference(reference, self.headers.get('Range'))
+                content_type, data = result[:2]
+                metadata = result[2] if len(result) > 2 else {}
+                return self.send(metadata.get('status', 200), content_type, data, headers=metadata.get('headers'))
+            except (ValueError, RuntimeError, OSError):
+                return self.json(404, {'ok': False, 'message': 'This library preview is unavailable. Keep ComfyUI running and refresh the library.'})
         elif path.startswith('/api/comfy/output/'):
             # Media tags use the private cookie; API clients can use the session header.
             if not self.media_authenticated():
@@ -456,7 +481,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(403, {'ok': False})
         if self.path == '/api/speech/transcribe':
             return self.receive_speech()
-        private_paths = ('/api/pc/action', '/api/pc/favourites', '/api/lm/start', '/api/lm/open', '/api/lm/load', '/api/lm/chat', '/api/tts/speak', '/api/remote/approve', '/api/remote/revoke', '/api/desktop/session')
+        private_paths = ('/api/pc/action', '/api/pc/favourites', '/api/lm/start', '/api/lm/open', '/api/lm/load', '/api/lm/chat', '/api/tts/speak', '/api/remote/approve', '/api/remote/revoke', '/api/desktop/session', '/api/agents/send', '/api/agents/receipt', '/api/comfy/library/open')
         if self.path not in ('/api/tap', '/api/diagnostics', '/api/calculate', '/api/control', '/api/bookmarks') + private_paths:
             return self.json(404, {'ok': False})
         origin = self.headers.get('Origin')
@@ -468,11 +493,17 @@ class Handler(BaseHTTPRequestHandler):
             if not self.control_authenticated():
                 return self.json(403, {'ok': False, 'message': 'Refresh to renew PC access.'})
             from ai_services import MAX_CHAT_REQUEST_BYTES
-            limit = MAX_CHAT_REQUEST_BYTES if self.path == '/api/lm/chat' else 24000 if self.path == '/api/tts/speak' else 4096
+            limit = MAX_CHAT_REQUEST_BYTES if self.path == '/api/lm/chat' else 40000 if self.path == '/api/agents/send' else 24000 if self.path == '/api/tts/speak' else 4096
             payload = self.read_json(limit)
             if payload is None:
                 return
             try:
+                if self.path == '/api/agents/send':
+                    return self.json(200, self.server.agent_team.send(payload))
+                if self.path == '/api/agents/receipt':
+                    return self.json(200, self.server.agent_team.receipt(payload))
+                if self.path == '/api/comfy/library/open':
+                    return self.json(200, self.server.comfy_library.open_folder(payload))
                 if self.path == '/api/tts/speak':
                     cancellation = threading.Event()
                     monitor_stop = threading.Event()
@@ -681,6 +712,10 @@ def main():
         from ai_services import AIService
         server.app_registry = AppRegistry(ROOT)
         server.ai_service = AIService(ROOT)
+        from agent_team import AgentTeam
+        from comfy_library import ComfyLibrary
+        server.agent_team = AgentTeam(ROOT)
+        server.comfy_library = ComfyLibrary(ROOT)
         from speech_service import SpeechService
         server.speech_service = SpeechService()
         from pc_tts import TTSService

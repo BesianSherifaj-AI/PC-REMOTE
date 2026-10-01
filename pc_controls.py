@@ -32,6 +32,27 @@ _HARDWARE_LOCK = threading.Lock()
 _HARDWARE_CACHE = None
 _HARDWARE_TIME = -float("inf")
 
+# All launch targets belong to the server, never to the request payload.
+# Settings URIs: https://learn.microsoft.com/windows/apps/develop/launch/launch-settings
+_SETTINGS_APPS = {
+    "settings": ("ms-settings:", "Windows Settings"),
+    "display-settings": ("ms-settings:display", "Windows display settings"),
+    "sound-settings": ("ms-settings:sound", "Windows sound settings"),
+    "bluetooth-settings": ("ms-settings:bluetooth", "Windows Bluetooth settings"),
+    # The general page also works on PCs without a Wi-Fi adapter.
+    "network-settings": ("ms-settings:network-status", "Windows network settings"),
+}
+_SYSTEM_APPS = {
+    "calculator": ("calc.exe", "Calculator"),
+    "notepad": ("notepad.exe", "Notepad"),
+    "task-manager": ("Taskmgr.exe", "Task Manager"),
+}
+_EXPLORER_APPS = {
+    "file-explorer": ((), "File Explorer"),
+    # Let Windows resolve the user's actual (possibly redirected) Downloads.
+    "downloads": (("shell:Downloads",), "Downloads"),
+}
+
 
 class _GUID(ctypes.Structure):
     _fields_ = [
@@ -294,7 +315,8 @@ def perform_action(payload):
         if not isinstance(value, bool):
             raise ValueError("Mute value must be true or false.")
     elif action == "open-app":
-        if not isinstance(value, str) or value not in ("calculator", "notepad", "sound-settings"):
+        if (not isinstance(value, str)
+                or value not in _SETTINGS_APPS and value not in _SYSTEM_APPS and value not in _EXPLORER_APPS):
             raise ValueError("This application is not allowed.")
     elif action == "media":
         if not isinstance(value, str) or value not in ("play-pause", "next", "previous"):
@@ -309,16 +331,21 @@ def perform_action(payload):
         return {"ok": True, "message": "Media key sent to the PC's media player."}
 
     if action == "open-app":
-        if value == "sound-settings":
-            os.startfile("ms-settings:sound")
-            label = "Windows sound settings"
+        if value in _SETTINGS_APPS:
+            uri, label = _SETTINGS_APPS[value]
+            os.startfile(uri)
         else:
             system_directory = _system_directory()
-            names = {"calculator": "calc.exe", "notepad": "notepad.exe"}
-            subprocess.Popen([str(system_directory / names[value])],
+            if value in _SYSTEM_APPS:
+                name, label = _SYSTEM_APPS[value]
+                arguments = [str(system_directory / name)]
+            else:
+                extra_arguments, label = _EXPLORER_APPS[value]
+                arguments = [str(system_directory.parent / "explorer.exe"), *extra_arguments]
+            subprocess.Popen(arguments,
                              shell=False, cwd=str(system_directory))
-            label = {"calculator": "Calculator", "notepad": "Notepad"}[value]
-        return {"ok": True, "message": f"Opened {label} on this PC."}
+        # Launch acceptance does not prove that Windows granted foreground focus.
+        return {"ok": True, "message": f"Requested {label} on this PC."}
 
     with _AUDIO_LOCK:
         flow = 1 if action == "microphone-mute" else 0

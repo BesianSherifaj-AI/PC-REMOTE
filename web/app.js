@@ -17,6 +17,7 @@
   function sentImageCount() { return chat.reduce(function (total, item) { return total + (Array.isArray(item.content) ? item.content.filter(function (part) { return part.type === 'image_url'; }).length : 0); }, 0); }
   var attachments = window.createMaicAttachments({vision: selectedVision, sentCount: sentImageCount, onChange: updateChatControls});
   var reader = window.createMaicReader({token: function () { return token; }, get: get, onError: function () { stopLive(); }, onEnded: function () { if (liveVoice && page === 'chat' && !document.hidden) { voice.start(); } }});
+  var companion = window.createPCCompanion ? window.createPCCompanion({get: get, post: post, ready: function () { return !!token; }, page: function () { return page; }, renderOutputs: renderComfyOutputs, showRecent: function () { outputSignature = ''; loadComfy(); }}) : {connected: function () { text('homeTeamStatus', 'Extra tools did not load. Refresh to retry.'); }, onPage: function () {}, isLibrary: function () { return false; }, refreshLibrary: function () {}};
   function el(id) { return document.getElementById(id); }
   function text(id, value) { el(id).textContent = value; }
   function showAccess() { el('remoteAccess').open = true; el('remoteAccess').scrollIntoView({block: 'start'}); }
@@ -53,7 +54,7 @@
       localPC = !error && !!data.canManageDevices && location.protocol === 'http:';
       el('localApprovalHint').hidden = !localPC;
       text('audioMessage', error || 'Controls affect your Windows PC.');
-      loadWebsites(); if (token) { loadAudio(); loadHardware(); loadRemote(); if (page === 'apps') { loadApps(); } if (page === 'chat') { loadModels(); reader.load(); } if (page === 'comfy') { loadComfy(); } }
+      loadWebsites(); if (token) { companion.connected(); loadAudio(); loadHardware(); loadRemote(); if (page === 'apps') { loadApps(); } if (page === 'chat') { loadModels(); reader.load(); } if (page === 'comfy') { loadComfy(); } }
       if (location.hash === '#access') { showAccess(); }
       updateChatControls(); if (!error) { checkConnection(); }
     });
@@ -61,12 +62,12 @@
   function showPage(name) {
     fullscreenGeneration++; cancelFullscreenRequest(); exitExpanded(false);
     if (nativeFullscreen() && nativeFullscreen() !== document.documentElement) { exitNativeFullscreen(); }
-    if (['home', 'apps', 'desktop', 'chat', 'comfy'].indexOf(name) < 0) { name = 'home'; }
+    if (['home', 'apps', 'desktop', 'chat', 'comfy', 'agents'].indexOf(name) < 0) { name = 'home'; }
     page = name; each('.page', function (item) { item.hidden = item.id !== page; });
     document.body.setAttribute('data-page', name);
     each('nav button', function (item) { var selected = item.getAttribute('data-page') === page; item.className = selected ? 'selected' : ''; if (selected) { item.setAttribute('aria-current', 'page'); } else { item.removeAttribute('aria-current'); } });
     if (location.hash !== '#' + name) { history.replaceState(null, '', '#' + name); }
-    window.scrollTo(0, 0);
+    window.scrollTo(0, 0); companion.onPage(name);
     if (page !== 'chat') { stopLive(); voice.cancel(); stopReading(); }
     if (desktopState === 'connected') { el('viewer').contentWindow.postMessage({type: page === 'desktop' && !document.hidden ? 'maic-viewer-resume' : 'maic-viewer-suspend', connectionId: desktopGeneration}, location.origin); }
     if (page !== 'comfy') { each('#comfyOutputs video', function (video) { video.pause(); }); }
@@ -281,10 +282,15 @@
       comfyBusy = false;
       text('comfyMessage', error || data.message); if (error) { return; }
       text('comfyRunning', data.available ? data.queue.running : '—'); text('comfyPending', data.available ? data.queue.pending : '—');
+      if (!companion.isLibrary()) { renderComfyOutputs(data); }
+    }, true);
+  }
+  function renderComfyOutputs(data, force) {
+    if (force) { each('#comfyOutputs video', function (video) { video.pause(); }); if (document.body.getAttribute('data-expanded') === 'media') { exitExpanded(); } outputSignature = ''; }
       var signature = JSON.stringify({available: data.available, outputs: data.outputs}); if (signature === outputSignature) { return; } outputSignature = signature;
       if (expandedTarget && document.body.getAttribute('data-expanded') === 'media') { outputSignature = ''; return; }
       var container = el('comfyOutputs'); if (container.querySelector('video') && Array.prototype.some.call(container.querySelectorAll('video'), function (v) { return !v.paused; })) { outputSignature = ''; return; } container.textContent = '';
-      if (!data.outputs.length) { var empty = document.createElement('article'); empty.className = 'card empty-state'; empty.setAttribute('role', 'status'); empty.textContent = data.available ? 'No recent outputs yet. New ComfyUI results appear here.' : 'Start ComfyUI on your PC to see results.'; container.appendChild(empty); }
+      if (!data.outputs.length) { var empty = document.createElement('article'); empty.className = 'card empty-state'; empty.setAttribute('role', 'status'); empty.textContent = data.emptyMessage || (data.available ? 'No recent outputs yet. New ComfyUI results appear here.' : 'Start ComfyUI on your PC to see results.'); container.appendChild(empty); }
       data.outputs.forEach(function (item) {
         var card = document.createElement('article'); card.className = 'card';
         var media = document.createElement(item.type === 'video' ? 'video' : 'img'); media.src = item.previewUrl; media.setAttribute('aria-label', item.name);
@@ -304,9 +310,10 @@
         var mediaActions = document.createElement('div'); mediaActions.className = 'row media-actions';
         if (item.type === 'video') { var play = document.createElement('button'); play.textContent = 'Play video'; play.onclick = function () { if (!media.paused) { media.pause(); return; } var result = media.play(); if (result && result.catch) { result.catch(function () { feedback.textContent = 'Playback did not start. Try again or open the output link.'; }); } }; mediaActions.appendChild(play); }
         var expand = document.createElement('button'); expand.className = 'quiet'; expand.textContent = 'Full screen'; expand.onclick = function () { toggleFullscreen(media); }; mediaActions.appendChild(expand); card.appendChild(mediaActions);
-        if (item.type === 'video') { card.appendChild(feedback); } card.appendChild(a); container.appendChild(card);
+        if (item.type === 'video') { card.appendChild(feedback); } card.appendChild(a);
+        if (item.folder || item.modified) { var details = document.createElement('p'); details.className = 'small output-meta'; details.textContent = (item.folder || 'Output folder') + (item.modified ? ' · ' + new Date(item.modified * 1000).toLocaleString() : ''); card.appendChild(details); }
+        container.appendChild(card);
       });
-    }, true);
   }
   function loadRemote() {
     if (!token || remoteBusy) { return; } remoteBusy = true;
@@ -524,7 +531,7 @@
   el('chatInput').onkeydown = function (event) { if ((event.key === 'Enter' || event.keyCode === 13) && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && !event.isComposing && event.keyCode !== 229) { sendChat(event); } };
   el('chatRead').onclick = readReply; el('chatQuiet').onclick = function () { stopLive(); stopReading(); };
   el('chatClear').onclick = function () { stopLive(); stopChat(); stopReading(); voice.cancel(); attachments.clear(); chat = []; el('chatRead').disabled = true; el('chatMessages').textContent = ''; el('chatEmpty').hidden = false; el('chatInput').value = ''; updateChatControls(); text('chatStatus', 'Conversation cleared.'); };
-  el('comfyRefresh').onclick = loadComfy;
+  el('comfyRefresh').onclick = function () { loadComfy(); companion.refreshLibrary(); };
   el('refreshRemote').onclick = loadRemote;
   el('dismissApproval').onclick = function () { dismissedSignature = pendingSignature; el('pcApproval').hidden = true; };
   el('touchTest').onclick = function () { request('POST', '/api/tap', null, function (error, data) { text('helpMessage', error || data.message); }); };

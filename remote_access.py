@@ -35,15 +35,17 @@ PUBLIC_APP_ASSETS = {
     '/apple-touch-icon.png': 'image/png',
 }
 GET_PATHS = frozenset((
-    '/', '/app.js', '/voice.js', '/chat-media.js', '/style.css', '/desktop-viewer.html', '/tone.wav',
+    '/', '/app.js', '/voice.js', '/chat-media.js', '/companion.js', '/style.css', '/agent-avatars.css', '/desktop-viewer.html', '/tone.wav',
+    '/agent-avatars/moss.svg', '/agent-avatars/aqua.svg', '/agent-avatars/coral.svg', '/agent-avatars/amber.svg',
     '/api/health', '/api/status', '/api/apps', '/api/control-session', '/api/audio',
     '/api/pc/apps', '/api/pc/state', '/api/hardware', '/api/lm/models',
-    '/api/speech/status', '/api/tts/status', '/api/comfy/status', '/api/desktop/status', '/api/remote/info',
+    '/api/speech/status', '/api/tts/status', '/api/comfy/status', '/api/desktop/status', '/api/remote/info', '/api/agents/status', '/api/comfy/library',
 ))
 POST_PATHS = frozenset((
     '/api/tap', '/api/diagnostics', '/api/calculate', '/api/control', '/api/bookmarks',
     '/api/pc/action', '/api/pc/favourites', '/api/lm/start', '/api/lm/open',
     '/api/lm/load', '/api/lm/chat', '/api/speech/transcribe', '/api/tts/speak', '/api/desktop/session',
+    '/api/agents/send', '/api/agents/receipt', '/api/comfy/library/open',
 ))
 HOP_HEADERS = frozenset((
     'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
@@ -261,7 +263,12 @@ class RemoteGateway:
         if request.method not in ('GET', 'HEAD') and origin != self.public_origin:
             raise web.HTTPForbidden(text='The remote origin is required.')
         if request.query_string:
-            raise web.HTTPBadRequest(text='Query parameters are not supported.')
+            keys = {'folder', 'search', 'media', 'offset', 'limit'}
+            if (request.method != 'GET' or request.path != '/api/comfy/library'
+                    or len(request.query_string) > 2048 or set(request.query) - keys
+                    or any(len(request.query.getall(key)) != 1 for key in request.query)
+                    or any(len(value) > 128 or any(ord(c) < 32 for c in value) for value in request.query.values())):
+                raise web.HTTPBadRequest(text='Unsupported query parameters.')
         raw = request.raw_path.split('?', 1)[0]
         decoded = unquote(raw)
         if ('\\' in decoded or '\x00' in decoded or '%' in decoded
@@ -391,7 +398,7 @@ class RemoteGateway:
             if request.headers.get('X-MAIC-Language', 'auto') not in ('auto', 'en', 'el', 'sq', 'de', 'it'):
                 raise web.HTTPBadRequest(text='Unsupported recording language.')
         try:
-            async with self._client.request(request.method, self.upstream + request.path,
+            async with self._client.request(request.method, self.upstream + request.path_qs,
                                             headers=self._headers(request), data=body,
                                             allow_redirects=False) as upstream:
                 if 300 <= upstream.status < 400:
@@ -486,7 +493,7 @@ class RemoteGateway:
         if path == '/desktop/ws' and request.method == 'GET':
             return await self._websocket(request, digest)
         valid_asset = (path.startswith('/desktop/') and bool(re.fullmatch(r'/desktop/[A-Za-z0-9_./-]+\.(?:js|css|svg|png|html)', path)))
-        valid_output = bool(re.fullmatch(r'/api/comfy/output/[A-Za-z0-9_-]{1,128}', path))
+        valid_output = bool(re.fullmatch(r'/api/comfy/(?:output|library/output)/[A-Za-z0-9_-]{1,128}', path))
         if ((request.method == 'GET' and (path in GET_PATHS or valid_asset or valid_output))
                 or (request.method == 'POST' and path in POST_PATHS)):
             return await self._proxy(request, digest)

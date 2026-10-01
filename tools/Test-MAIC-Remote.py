@@ -105,14 +105,18 @@ async def main():
                 report['checks']['pairApprove'] = True
                 stage = 'authenticated-dashboard-routes'
                 await request(remote, public, '/', headers=remote_headers, json_response=False)
-                for path in ('/app.js', '/voice.js', '/chat-media.js', '/',
+                for path in ('/app.js', '/voice.js', '/chat-media.js', '/companion.js', '/agent-avatars.css', '/agent-avatars/moss.svg', '/',
                              '/desktop-viewer.html', '/desktop/core/rfb.js'):
                     await request(remote, public, path, headers=remote_headers, json_response=False)
                 control = await request(remote, public, '/api/control-session', headers=remote_headers)
                 remote_headers['X-MAIC-Control'] = control['token']
                 for path in ('/api/pc/apps', '/api/pc/state', '/api/hardware', '/api/lm/models',
-                             '/api/speech/status', '/api/tts/status', '/api/desktop/status'):
+                             '/api/speech/status', '/api/tts/status', '/api/desktop/status', '/api/agents/status'):
                     await request(remote, public, path, headers=remote_headers)
+                library = await request(remote, public, '/api/comfy/library?folder=root&search=&media=video&offset=0&limit=2', headers=remote_headers)
+                if len(library.get('outputs', [])) > 2 or any(item.get('type') != 'video' for item in library.get('outputs', [])):
+                    raise RuntimeError('Remote output filters were not respected.')
+                report['checks']['agentStatusAndLibraryFilters'] = True
                 await request(remote, public, '/api/remote/status', 403, headers=remote_headers, json_response=False)
                 report['checks']['dashboardRoutes'] = True
                 report['checks']['remoteCannotManageDevices'] = True
