@@ -209,7 +209,28 @@ class UpgradeAPITests(unittest.TestCase):
         self.assertEqual(response_headers['Content-Type'], 'audio/wav')
         self.assertEqual(response_headers['Cache-Control'], 'no-store')
         self.server.tts_service.synthesize.assert_called_once_with(payload)
-        self.assertEqual(self.request('/api/tts/speak', {'text': 'a' * 25000}, headers)[0], 413)
+        self.server.tts_service.synthesize.reset_mock()
+        limit_payload = {'text': 'a' * (24000 - len(json.dumps({'text': ''}).encode('utf-8')))}
+        self.assertEqual(len(json.dumps(limit_payload).encode('utf-8')), 24000)
+        self.assertEqual(self.request('/api/tts/speak', limit_payload, headers)[0], 200)
+        self.server.tts_service.synthesize.assert_called_once_with(limit_payload)
+        self.server.tts_service.synthesize.reset_mock()
+
+        # The limit is checked from headers before reading the body. Sending
+        # no rejected bytes avoids a Windows reset from unread socket data and
+        # also proves that rejection does not wait for an oversized upload.
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=2)
+        self.addCleanup(connection.close)
+        connection.putrequest('POST', '/api/tts/speak')
+        for key, value in headers.items():
+            connection.putheader(key, value)
+        connection.putheader('Content-Type', 'application/json')
+        connection.putheader('Content-Length', '24001')
+        connection.endheaders()
+        response = connection.getresponse()
+        self.assertEqual(response.status, 413)
+        self.assertFalse(json.loads(response.read())['ok'])
+        self.server.tts_service.synthesize.assert_not_called()
 
     def test_image_chat_body_fits_route_without_expanding_other_actions(self):
         headers = self.authorized()

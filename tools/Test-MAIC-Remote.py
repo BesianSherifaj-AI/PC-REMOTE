@@ -105,7 +105,7 @@ async def main():
                 report['checks']['pairApprove'] = True
                 stage = 'authenticated-dashboard-routes'
                 await request(remote, public, '/', headers=remote_headers, json_response=False)
-                for path in ('/app.js', '/voice.js', '/chat-media.js', '/?workspace=codex',
+                for path in ('/app.js', '/voice.js', '/chat-media.js', '/',
                              '/desktop-viewer.html', '/desktop/core/rfb.js'):
                     await request(remote, public, path, headers=remote_headers, json_response=False)
                 control = await request(remote, public, '/api/control-session', headers=remote_headers)

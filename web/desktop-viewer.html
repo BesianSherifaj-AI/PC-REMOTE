@@ -1,16 +1,48 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MAIC desktop viewer</title>
-<style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#030708;font:14px Arial;color:#eaf3f6;overflow:hidden}body{display:flex;flex-direction:column}#toolbar,#zoomControls,#typing,#scroll{display:flex;flex-shrink:0;background:#142630;padding:5px}button{font:bold 13px Arial;min-height:42px;background:#254352;border:1px solid #456676;color:white;border-radius:6px;padding:8px 12px;flex:1;margin:0 3px}button[aria-pressed=true]{background:#426b52}#screen{flex:1;min-height:0;overflow:hidden;touch-action:none;overscroll-behavior:none}#screen>div{overflow:hidden!important}#screen canvas{flex-shrink:0}#zoomControls{align-items:center;padding-top:0}#zoomControls button{flex:0 0 auto;min-width:48px;min-height:36px;padding:6px 10px}#zoomLevel{min-width:65px;text-align:center;font-size:12px}#gestureHint{flex:1;margin:0 8px;font-size:12px;color:#b5ccd5}input{flex:1;min-width:0;background:#091821;color:white;border:1px solid #456676;border-radius:6px;font:17px Arial;padding:10px}#typing button{flex:0 0 75px}#status{padding:5px 10px;background:#142630;font-size:11px}body [hidden]{display:none!important}@media(max-width:600px){button{font-size:11px;padding:7px 5px}#gestureHint{font-size:10px}}
-/* Wrap touch controls instead of squeezing them outside a phone screen. */
+<style>
+:root{--paper:#f4f5ef;--ink:#18392f;--muted:#68776c;--line:#dce2d7;--lime:#c0ec83}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--paper);color:var(--ink);font:14px Arial,sans-serif}
+body{display:flex;flex-direction:column}
+#toolbar,#zoomControls,#typing,#scroll{display:flex;flex-shrink:0;padding:4px 7px}
+#toolbar{background:#fff;border-bottom:1px solid var(--line)}
+button{flex:1;min-width:44px;min-height:44px;margin:0 3px;padding:7px 10px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font:bold 12px Arial,sans-serif;line-height:1.2;cursor:pointer;-webkit-tap-highlight-color:transparent}
+button:hover{background:#edf2e8;border-color:#b4c2aa}
+button:focus{outline:2px solid #789c55;outline-offset:1px}
+button:disabled{opacity:.42;cursor:default}
+button[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--lime)}
+#control[aria-pressed=true]{color:#fff}
+#control[aria-pressed=true]::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--lime);vertical-align:1px}
+#scale[aria-pressed=true],#quality[aria-pressed=true]{background:#eaf3df;border-color:#c9dab8;color:var(--ink)}
+#zoomControls{align-items:center;background:var(--paper);border-bottom:1px solid var(--line)}
+#zoomControls button{flex:0 0 auto;min-width:44px;padding:6px 10px}
+#zoomLevel{min-width:62px;text-align:center;font-size:12px;font-weight:bold;font-variant-numeric:tabular-nums}
+#gestureHint{flex:1;margin:0 8px;color:var(--muted);font-size:11px;line-height:1.35}
+#screen{flex:1;min-height:0;overflow:hidden;background:#112820;touch-action:none;overscroll-behavior:none}
+#screen>div{overflow:hidden!important}
+#screen canvas{flex-shrink:0}
+#typing,#scroll{background:#fff;border-bottom:1px solid var(--line)}
+input{flex:1;min-width:0;min-height:44px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);font:16px Arial,sans-serif}
+input:focus{outline:2px solid #789c55;outline-offset:1px}
+#typing button{flex:0 0 75px;background:var(--ink);border-color:var(--ink);color:var(--lime)}
+#scroll button{padding:6px;font-size:11px}
+#status{flex-shrink:0;min-height:23px;padding:5px 10px;border-top:1px solid var(--line);background:#fff;color:var(--muted);font-size:11px;line-height:1.25;overflow-wrap:break-word}
+body [hidden]{display:none!important}
+/* Two compact rows keep every action reachable on a 360px touchscreen. */
 @media(max-width:600px){
-  #toolbar,#scroll{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-gap:4px;padding:5px}
-  #toolbar button,#scroll button{margin:0;min-width:0;min-height:44px;font-size:11px;line-height:1.2;padding:6px 3px;white-space:normal;overflow-wrap:break-word}
+  #toolbar,#scroll{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-gap:4px;padding:4px 6px}
+  #toolbar button,#scroll button{margin:0;min-width:0;padding:6px 3px;font-size:11px;white-space:normal;overflow-wrap:break-word}
+  #fullscreen{grid-column:span 2}
   #scroll{max-height:144px;overflow-y:auto;-webkit-overflow-scrolling:touch}
-  #zoomControls{flex-wrap:wrap;padding:4px 5px}#zoomControls button{min-height:44px;margin:0 2px;padding:6px 8px}
-  #zoomLevel{min-width:50px}#gestureHint{flex:1 1 100%;margin:5px 4px 2px;font-size:11px;line-height:1.3}
-  #typing{padding:5px}#typing input{font-size:16px;min-height:44px}#typing button{min-height:44px;flex-basis:65px;margin-left:5px}
-  #status{padding:4px 8px;font-size:10px;overflow-wrap:break-word}
+  #zoomControls{padding:4px 6px}
+  #zoomControls button{margin:0 2px;padding:6px 9px}
+  #zoomLevel{min-width:52px}
+  #gestureHint{display:none}
+  #typing{padding:4px 6px}
+  #typing button{flex-basis:65px;margin-left:5px}
+  #status{padding:4px 8px;font-size:10px}
 }
-@media(max-width:340px){#toolbar,#scroll{grid-template-columns:repeat(3,minmax(0,1fr))}#zoomControls button{min-width:42px;padding:6px}}
+@media(max-width:340px){#toolbar,#scroll{grid-template-columns:repeat(3,minmax(0,1fr))}#fullscreen{grid-column:auto}#zoomControls button{padding:6px}}
 </style></head><body>
 <div id="toolbar" role="group" aria-label="Desktop mode and controls"><button id="control" type="button" aria-pressed="true" title="One finger controls Windows; two fingers pan and pinch-zoom.">Control</button><button id="pan" type="button" aria-pressed="false" title="One-finger panning; Windows input is blocked.">Pan only</button><button id="viewOnly" type="button" aria-pressed="false">View only</button><button id="scale" type="button" aria-pressed="true">Fit screen</button><button id="keyboard" type="button">Keyboard</button><button id="scrollToggle" type="button">Scroll / keys</button><button id="fullscreen" type="button">Full / exit screen</button></div>
 <div id="zoomControls"><button id="zoomOut" aria-label="Zoom out">−</button><span id="zoomLevel">Fit</span><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomActual" title="Show desktop at its original size">100%</button><button id="quality" aria-pressed="false" title="Switch between responsive and sharper images">Fast</button><span id="gestureHint">One finger controls Windows; two fingers pan and pinch this view.</span></div>

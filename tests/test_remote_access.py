@@ -190,7 +190,7 @@ class GatewayTests(unittest.TestCase):
         self.assertIn(b'Request connection', body)
         self.assertIn(f'href="{self.origin}/#access"'.encode(), body)
         self.assertIn(b'Open approval on this PC', body)
-        self.assertIn(b'On your Windows PC', body)
+        self.assertIn(b'Only your Windows PC can approve the connection.', body)
         self.assertIn(('Content-Security-Policy', "frame-ancestors 'self'"), headers)
         self.assertIn(('Referrer-Policy', 'no-referrer'), headers)
         self.assertIn(('Permissions-Policy', 'microphone=(self), camera=()'), headers)
@@ -312,8 +312,7 @@ class GatewayTests(unittest.TestCase):
         cookie = self.approved()
         for route in ('/chat-media.js', '/api/tts/status'):
             self.assertEqual(self.request('GET', route, cookie=cookie)[0], 200)
-        self.assertEqual(self.request('GET', '/?workspace=codex', cookie=cookie)[0], 200)
-        self.assertEqual(self.request('GET', '/?workspace=codex&url=http://unrelated.invalid', cookie=cookie)[0], 400)
+        self.assertEqual(self.request('GET', '/', cookie=cookie)[0], 200)
         self.assertEqual(self.request('POST', '/api/tts/speak', {'text': 'hello'}, cookie=cookie)[0], 200)
         # Encoded image bodies exceed the old global 2MB limit, but only chat may.
         payload = {'image_fixture': 'x' * (2 * 1024 * 1024 + 10)}
@@ -330,6 +329,8 @@ class GatewayTests(unittest.TestCase):
             ('GET', '/desktop/../private.js', 400), ('GET', '/desktop/%2e%2e/private.js', 400),
             ('GET', '/desktop/%252e%252e/private.js', 400), ('GET', '/desktop/core%5crfb.js', 400),
             ('GET', '/api/pc/apps?url=http://evil.example', 400),
+            ('GET', '/?workspace=codex', 400),
+            ('GET', '/?workspace=codex&url=http://unrelated.invalid', 400),
         ):
             self.assertEqual(self.request(method, path, {} if method == 'POST' else None, cookie=cookie)[0], status, path)
         self.assertEqual(len(self.upstream.seen), count)
@@ -372,23 +373,34 @@ class GatewayTests(unittest.TestCase):
         identity = self.gateway.status()['devices'][0]['id']
         count = len(self.upstream.seen)
         connection = socket.create_connection(('127.0.0.1', self.gateway.port), timeout=2)
+        self.addCleanup(connection.close)
         body = b'{"action":"speaker-mute","value":true}'
         header = (f'POST /api/pc/action HTTP/1.1\r\nHost: {HOST}\r\nOrigin: {ORIGIN}\r\n'
                   f'Cookie: {cookie}\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n').encode()
-        connection.sendall(header + body[:2])
-        deadline = time.monotonic() + 1
-        while not self.gateway._active_tasks and time.monotonic() < deadline:
-            time.sleep(0.005)
-        self.assertTrue(self.gateway._active_tasks)
-        self.gateway.revoke(identity)
-        try:
-            connection.sendall(body[2:])
-            self.assertEqual(connection.recv(1), b'')
-        except (ConnectionResetError, BrokenPipeError):
-            pass
-        finally:
-            connection.close()
-        self.assertEqual(len(self.upstream.seen), count)
+        started, finished = threading.Event(), threading.Event()
+        proxy_request = self.gateway._proxy_request
+
+        async def observed_request(request, digest):
+            started.set()
+            try:
+                return await proxy_request(request, digest)
+            finally:
+                finished.set()
+
+        # Observe the real body reader so revocation happens after the approved
+        # request is registered, and the no-upstream assertion runs after exit.
+        with patch.object(self.gateway, '_proxy_request', side_effect=observed_request):
+            connection.sendall(header + body[:2])
+            self.assertTrue(started.wait(1), 'The partial upload never reached the body reader.')
+            self.gateway.revoke(identity)
+            try:
+                connection.sendall(body[2:])
+                self.assertEqual(connection.recv(1), b'')
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                # Windows may report WSAECONNABORTED instead of EOF or reset.
+                pass
+            self.assertTrue(finished.wait(1), 'The revoked upload handler kept running.')
+            self.assertEqual(len(self.upstream.seen), count)
 
     def test_pair_rate_limit_and_expiry(self):
         cookies = [self.pair() for _ in range(6)]

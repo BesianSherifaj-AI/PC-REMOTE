@@ -45,18 +45,23 @@ HOP_HEADERS = frozenset((
 ))
 PAIR_PAGE = b'''<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to your PC</title>
-<style>body{background:#101823;color:#edf3fb;font:18px system-ui;margin:0;padding:32px}
-main{max-width:520px;margin:8vh auto}button{background:#4f9ef8;color:#081727;border:0;border-radius:12px;padding:18px 24px;font:inherit}
-#code{font-size:44px;letter-spacing:8px}p{line-height:1.5}input{display:block;background:#172536;color:#edf3fb;border:1px solid #46617e;border-radius:8px;padding:12px;font:inherit;max-width:90%;margin:12px 0}</style><main>
-<h1>Connect to your PC</h1><p id="status">Approve this browser from the MAIC dashboard on your PC.</p>
+<style>*{box-sizing:border-box}body{background:#f4f5ef;color:#1d3028;font:16px "Segoe UI",Roboto,Arial,sans-serif;margin:0;padding:32px 20px}
+main{max-width:520px;margin:8vh auto;background:#fff;border:1px solid #dde2d7;border-radius:22px;padding:34px;box-shadow:0 12px 40px #243a2308}
+h1{font-size:30px;font-weight:600;letter-spacing:-1px;line-height:1.2;margin:0 0 18px}h1:before{content:"PC REMOTE";display:block;color:#647553;font-size:10px;letter-spacing:2px;margin-bottom:22px}
+button{min-height:48px;background:#18392f;color:#fff;border:1px solid #18392f;border-radius:11px;padding:13px 20px;font:600 14px "Segoe UI",Roboto,Arial,sans-serif;cursor:pointer;touch-action:manipulation}button:hover{background:#285044}
+button:focus,input:focus,a:focus{outline:2px solid #528745;outline-offset:3px}label{display:block;margin-top:24px;font-size:12px;font-weight:600;color:#69766b}
+#code{font-size:44px;font-weight:600;letter-spacing:7px;font-variant-numeric:tabular-nums;color:#18392f;background:#edf4e7;border-radius:12px;padding:16px;text-align:center;margin:22px 0}#code:empty{display:none}
+p{line-height:1.6;color:#69766b;font-size:14px}input{display:block;background:#fff;color:#1d3028;border:1px solid #d4dccf;border-radius:10px;padding:13px;font:16px "Segoe UI",Roboto,Arial,sans-serif;width:100%;min-height:46px;margin:9px 0 20px}
+a{color:#345d37;text-underline-offset:3px;display:inline-block;padding:10px 0;min-height:44px}@media(max-width:400px){body{padding:20px 12px}main{margin:4vh auto;padding:25px 20px;border-radius:17px}h1{font-size:26px}button{width:100%}#code{font-size:36px;letter-spacing:5px}}</style><main>
+<h1>Connect to your PC</h1><p id="status">Request access, then approve this browser from PC Remote on your Windows PC.</p>
 <label id="label">Browser name<input id="name" maxlength="60"></label>
 <p id="code"></p><button id="pair">Request connection</button>
-<p>On your Windows PC, open the dashboard and approve this browser.</p>
-<p><a href="__PC_APPROVAL_URL__" style="color:#9dc9ff">Open approval on this PC</a></p></main><script>
+<p>Only your Windows PC can approve the connection. Match the code shown on both screens.</p>
+<p><a href="__PC_APPROVAL_URL__">Open approval on this PC</a></p></main><script>
 (function(){var button=document.getElementById('pair'),status=document.getElementById('status'),code=document.getElementById('code'),name=document.getElementById('name'),label=document.getElementById('label');
 name.value=navigator.userAgent.indexOf('Android')>=0?'MAIC':'My browser';
 function request(method,path,done,body){var x=new XMLHttpRequest();x.open(method,path,true);x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{done(JSON.parse(x.responseText));}catch(e){status.textContent='Connection unavailable. Try again.';}};x.onerror=function(){status.textContent='Connection unavailable. Try again.';};x.send(method==='POST'?JSON.stringify(body||{}):null);}
-function update(value){if(value.state==='approved'){location.replace('/');return;}if(value.code){code.textContent=value.code;status.textContent='Compare this code with the Remote access card on your PC, then approve this browser.';button.style.display='none';label.style.display='none';}else if(value.error){status.textContent=value.error;}else if(value.state==='unpaired'){if(code.textContent){status.textContent='The connection request expired. Request connection again.';}code.textContent='';button.style.display='';label.style.display='';}}
+function update(value){if(value.state==='approved'){location.replace('/');return;}if(value.code){code.textContent=value.code;status.textContent='On your PC, open Home > Connect from anywhere. Match this code and approve this browser.';button.style.display='none';label.style.display='none';}else if(value.error){status.textContent=value.error;}else if(value.state==='unpaired'){if(code.textContent){status.textContent='The connection request expired. Request connection again.';}code.textContent='';button.style.display='';label.style.display='';}}
 button.onclick=function(){request('POST','/_remote/pair',update,{label:name.value});};
 request('GET','/_remote/session',update);setInterval(function(){request('GET','/_remote/session',update);},2500);
 })();</script></html>'''
@@ -244,7 +249,7 @@ class RemoteGateway:
             raise web.HTTPForbidden(text='Invalid remote origin.')
         if request.method not in ('GET', 'HEAD') and origin != self.public_origin:
             raise web.HTTPForbidden(text='The remote origin is required.')
-        if request.query_string and not (request.method == 'GET' and request.path == '/' and request.query_string == 'workspace=codex'):
+        if request.query_string:
             raise web.HTTPBadRequest(text='Query parameters are not supported.')
         raw = request.raw_path.split('?', 1)[0]
         decoded = unquote(raw)

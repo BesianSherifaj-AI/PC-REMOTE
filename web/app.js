@@ -1,24 +1,29 @@
 (function () {
   'use strict';
-  var token = null, page = 'home', audio = null, apps = [], favouritesOnly = false, toastTimer;
+  var token = null, page = 'home', audio = null, apps = [], favouritesOnly = false, favouritesBusy = false, toastTimer;
   var chat = [], chatXHR = null, desktopCredentials = null, outputSignature = '', appsBusy = false;
   var modelsBusy = false, comfyBusy = false, hardwareBusy = false, modelLoading = false;
   var localPC = false, remoteBusy = false, pendingSignature = '', dismissedSignature = '';
   var audioBusy = false, audioChanging = 0, audioVersion = 0, volumeEditing = false, connectionBusy = false, sessionAt = 0;
   var liveVoice = false, quickSignature = '', pendingModelSelection = '';
-  var loadedModels = [], codexWorkspace = /(?:^|[?&])workspace=codex(?:&|$)/.test(location.search || ''), codexStarted = false, codexBusy = false;
+  var loadedModels = [], modelsReady = false;
   var modelSignature = '', availableSignature = '', remoteSignature = '', healthBusy = false;
   var desktopWanted = false, desktopState = 'disconnected', desktopMode = 'control', desktopGeneration = 0, desktopRetry = 0, desktopRetryTimer = null, desktopWatchdog = null;
   var voice = window.createMaicVoice({liveMode: function () { return liveVoice; }, onError: function () { stopLive(); }, onIdle: function (reason) { if (liveVoice && reason !== 'transcribed') { stopLive(); } }, token: function () { return token; }, append: function (value) {
-    var input = el('chatInput'); input.value = (input.value ? input.value + ' ' : '') + value; input.scrollIntoView({block: 'nearest'}); if (liveVoice) { sendChat({preventDefault: function () {}}); }
+    var input = el('chatInput'); input.value = (input.value ? input.value + ' ' : '') + value; updateChatControls(); input.scrollIntoView({block: 'nearest'}); if (liveVoice) { sendChat({preventDefault: function () {}}); }
   }});
   function selectedVision() { var match = loadedModels.filter(function (model) { return model.id === el('model').value; })[0]; return match ? match.vision : null; }
   function sentImageCount() { return chat.reduce(function (total, item) { return total + (Array.isArray(item.content) ? item.content.filter(function (part) { return part.type === 'image_url'; }).length : 0); }, 0); }
-  var attachments = window.createMaicAttachments({vision: selectedVision, sentCount: sentImageCount});
+  var attachments = window.createMaicAttachments({vision: selectedVision, sentCount: sentImageCount, onChange: updateChatControls});
   var reader = window.createMaicReader({token: function () { return token; }, get: get, onError: function () { stopLive(); }, onEnded: function () { if (liveVoice && page === 'chat' && !document.hidden) { voice.start(); } }});
   function el(id) { return document.getElementById(id); }
   function text(id, value) { el(id).textContent = value; }
+  function showAccess() { el('remoteAccess').open = true; el('remoteAccess').scrollIntoView({block: 'start'}); }
   function each(selector, fn) { Array.prototype.forEach.call(document.querySelectorAll(selector), fn); }
+  function updateChatControls() {
+    var selected = modelsReady && loadedModels.some(function (model) { return model.id === el('model').value; });
+    el('chatSend').disabled = !token || !selected || !!chatXHR || modelLoading || !!(attachments && attachments.busy()) || !(el('chatInput').value.trim() || attachments && attachments.get().length);
+  }
   function toast(message) { text('toast', message); el('toast').style.display = 'block'; clearTimeout(toastTimer); toastTimer = setTimeout(function () { el('toast').style.display = 'none'; }, 6000); }
   function request(method, path, body, callback, privateRequest) {
     var xhr = new XMLHttpRequest(), done = false;
@@ -40,7 +45,7 @@
   function post(path, body, callback, privateRequest) { return request('POST', path, body, callback, privateRequest); }
   function connect() {
     if (connectionBusy) { return; } connectionBusy = true;
-    token = null; text('connection', 'Connecting…');
+    token = null; updateChatControls(); text('connection', 'Connecting…');
     get('/api/control-session', function (error, data) {
       connectionBusy = false; sessionAt = error ? 0 : Date.now(); document.body.setAttribute('data-online', String(!error));
       token = error ? null : data.token; text('connection', error ? 'PC controls need approval' : location.protocol === 'https:' ? 'Connected · secure HTTPS' : 'Connected · local Wi-Fi');
@@ -48,12 +53,12 @@
       el('localApprovalHint').hidden = !localPC;
       text('audioMessage', error || 'Controls affect your Windows PC.');
       loadWebsites(); if (token) { loadAudio(); loadHardware(); loadRemote(); if (page === 'apps') { loadApps(); } if (page === 'chat') { loadModels(); reader.load(); } if (page === 'comfy') { loadComfy(); } }
-      if (location.hash === '#access') { el('remoteAccess').scrollIntoView({block: 'start'}); }
-      if (!error) { checkConnection(); if (codexWorkspace && !codexStarted) { codexStarted = true; focusCodex(true); } }
+      if (location.hash === '#access') { showAccess(); }
+      updateChatControls(); if (!error) { checkConnection(); }
     });
   }
   function showPage(name) {
-    if (['home', 'apps', 'desktop', 'chat', 'codex', 'comfy'].indexOf(name) < 0) { name = 'home'; }
+    if (['home', 'apps', 'desktop', 'chat', 'comfy'].indexOf(name) < 0) { name = 'home'; }
     page = name; each('.page', function (item) { item.hidden = item.id !== page; });
     document.body.setAttribute('data-page', name);
     each('nav button', function (item) { var selected = item.getAttribute('data-page') === page; item.className = selected ? 'selected' : ''; if (selected) { item.setAttribute('aria-current', 'page'); } else { item.removeAttribute('aria-current'); } });
@@ -99,7 +104,7 @@
   function canSwitch(app) { return app.running && app.hasWindow !== false; }
   function appStatus(app) { return app.active ? 'Active on Windows' : app.running ? app.hasWindow === false ? 'Running in background' : 'Running on Windows' : app.kind === 'packaged' ? 'Windows app' : 'Desktop app'; }
   function renderApps() {
-    var query = el('appSearch').value.toLowerCase(), container = el('appCards'); container.textContent = '';
+    var query = el('appSearch').value.trim().toLowerCase(), container = el('appCards'); container.textContent = '';
     var filtered = apps.filter(function (app) { return (!favouritesOnly || app.favourite) && app.name.toLowerCase().indexOf(query) !== -1; });
     filtered.sort(function (a, b) { return Number(b.favourite) - Number(a.favourite) || a.name.localeCompare(b.name); });
     filtered.forEach(function (app) {
@@ -112,13 +117,19 @@
       var open = document.createElement('button'); open.textContent = canSwitch(app) ? 'Switch to app' : 'Open on PC'; open.setAttribute('data-open-id', app.id);
       open.onclick = function () { open.disabled = true; post('/api/pc/action', {action: canSwitch(app) ? 'activate' : 'open', id: app.id}, function (error, data) { open.disabled = false; text('appMessage', error || data.message || 'Opened on Windows.'); if (error) { toast(error); } loadAppState(); }, true); };
       var star = document.createElement('button'); star.className = 'quiet star' + (app.favourite ? ' favourited' : ''); star.textContent = app.favourite ? '★' : '☆'; star.setAttribute('aria-label', (app.favourite ? 'Remove favourite ' : 'Favourite ') + app.name);
+      star.disabled = favouritesBusy;
       star.onclick = function () {
+        if (favouritesBusy) { return; } favouritesBusy = true; each('#appCards .star', function (button) { button.disabled = true; });
         var ids = apps.filter(function (item) { return item.id === app.id ? !item.favourite : item.favourite; }).map(function (item) { return item.id; });
-        post('/api/pc/favourites', {ids: ids}, function (error) { if (error) { toast(error); } else { app.favourite = !app.favourite; renderApps(); } }, true);
+        post('/api/pc/favourites', {ids: ids}, function (error) { favouritesBusy = false; if (error) { toast(error); each('#appCards .star', function (button) { button.disabled = false; }); } else { apps.forEach(function (item) { item.favourite = ids.indexOf(item.id) !== -1; }); renderApps(); } }, true);
       };
       row.appendChild(open); row.appendChild(star); card.appendChild(heading); card.appendChild(status); card.appendChild(row); container.appendChild(card);
     });
-    text('appMessage', filtered.length + ' apps' + (favouritesOnly ? ' in favourites' : ' · running status updates every 2 seconds'));
+    if (!filtered.length) {
+      var empty = document.createElement('article'); empty.className = 'card empty-state'; empty.setAttribute('role', 'status');
+      empty.textContent = query ? 'No apps match your search. Try another name' + (favouritesOnly ? ' or show all apps.' : '.') : favouritesOnly ? 'No favourites yet. Tap a star in All apps.' : 'No PC apps found. Refresh to check again.'; container.appendChild(empty);
+    }
+    text('appMessage', filtered.length + (filtered.length === 1 ? ' app' : ' apps') + (favouritesOnly ? ' · favourites' : ''));
   }
   function loadApps() {
     if (!token || appsBusy) { return; } appsBusy = true;
@@ -140,7 +151,8 @@
       modelsBusy = false;
       if (chatXHR || modelLoading) { return; }
       text('lmMessage', error || data.message); var select = el('model');
-      if (error) { el('chatSend').disabled = true; text('chatStatus', error); return; }
+      modelsReady = !error;
+      if (error) { updateChatControls(); if (!chat.length) { text('chatStatus', error); } return; }
       loadedModels = data.models; var signature = JSON.stringify(data.models), selected = pendingModelSelection || select.value;
       if (signature !== modelSignature && document.activeElement !== select) {
         select.textContent = ''; modelSignature = signature;
@@ -149,8 +161,8 @@
         if (data.models.some(function (model) { return model.id === selected; })) { select.value = selected; }
         pendingModelSelection = '';
       }
-      attachments.modelChanged(); el('chatSend').disabled = !data.models.some(function (model) { return model.id === select.value; });
-      if (!select.value) { text('chatStatus', data.models.length ? 'Choose a loaded model above, then send your message.' : 'No model is loaded. Choose an installed model above or load one in LM Studio on your PC.'); el('chatSetup').open = true; }
+      attachments.modelChanged(); updateChatControls();
+      if (!select.value && !chat.length) { text('chatStatus', data.models.length ? 'Choose a model to start chatting.' : 'Load a model from the choices above to start chatting.'); }
       var available = el('availableModel'), previous = available.value, installedSignature = JSON.stringify(data.availableModels || []);
       if (installedSignature !== availableSignature && document.activeElement !== available) {
         availableSignature = installedSignature; available.textContent = '';
@@ -168,9 +180,9 @@
       var button = document.createElement('button'); button.type = 'button'; button.className = 'quiet'; button.textContent = 'Use ' + model.name; button.title = model.description;
       button.onclick = function () {
         if (chatXHR || modelLoading || liveVoice) { text('chatStatus', 'Stop the current conversation before choosing another model.'); return; }
-        button.disabled = true; modelLoading = true; text('lmMessage', 'Loading your selected fast model on the PC…');
+        button.disabled = true; modelLoading = true; updateChatControls(); text('lmMessage', 'Loading ' + model.name + '…');
         post('/api/lm/load', {model: model.id}, function (error, result) {
-          button.disabled = false; modelLoading = false; text('lmMessage', error || result.message);
+          button.disabled = false; modelLoading = false; updateChatControls(); text('lmMessage', error || result.message);
           if (!error && result.selectedInstanceId) { pendingModelSelection = result.selectedInstanceId; }
           modelSignature = ''; loadModels();
         }, true);
@@ -178,14 +190,14 @@
     });
   }
   function stopLive() {
-    var wasLive = liveVoice; liveVoice = false; el('liveVoice').textContent = 'Start live conversation'; el('liveVoice').setAttribute('aria-pressed', 'false');
+    var wasLive = liveVoice; liveVoice = false; el('liveVoice').textContent = 'Live voice'; el('liveVoice').setAttribute('aria-pressed', 'false');
     if (wasLive) { voice.cancel(); stopReading(); }
   }
   el('liveVoice').onclick = function () {
     if (liveVoice) { stopLive(); stopChat(); text('chatStatus', 'Live conversation stopped.'); return; }
-    if (!token || !el('model').value || chatXHR) { text('chatStatus', 'Select a loaded model and finish the current reply first.'); return; }
+    if (!token || !modelsReady || !loadedModels.some(function (model) { return model.id === el('model').value; }) || chatXHR || modelLoading || attachments.busy()) { text('chatStatus', 'Choose a model and finish the current reply or image preparation first.'); return; }
     if (!reader.ready()) { reader.load(); text('chatStatus', 'Wait for the PC voice to be ready, then start live conversation.'); return; }
-    liveVoice = true; this.textContent = 'Stop live conversation'; this.setAttribute('aria-pressed', 'true'); voice.start();
+    liveVoice = true; this.textContent = 'Stop live'; this.setAttribute('aria-pressed', 'true'); voice.start();
   };
   function bubble(role, content) {
     el('chatEmpty').hidden = true; var item = document.createElement('div'); item.className = 'bubble ' + role;
@@ -195,17 +207,49 @@
     else { message.textContent = content; }
     item.appendChild(message); el('chatMessages').appendChild(item); return message;
   }
-  function scrollChat(force) { var box = el('chatMessages'); if (force || box.scrollHeight - box.scrollTop - box.clientHeight < 180) { box.scrollTop = box.scrollHeight; } }
+  function escapedMarker(value, index) { var count = 0; while (index > 0 && value.charAt(--index) === '\\') { count++; } return count % 2 === 1; }
+  function inlineReply(parent, value) {
+    var start = 0, index = 0;
+    while (index < value.length) {
+      var marker = value.substr(index, 2) === '**' ? '**' : value.charAt(index) === '`' ? '`' : '', end = -1;
+      if (marker && escapedMarker(value, index)) { end = value.indexOf(marker, index + marker.length); if (end !== -1 && !/[\r\n]/.test(value.slice(index, end))) { index = end + marker.length; continue; } }
+      if (marker && !escapedMarker(value, index) && value.charAt(index - 1) !== marker.charAt(0) && value.charAt(index + marker.length) !== marker.charAt(0)) {
+        end = value.indexOf(marker, index + marker.length);
+        while (end !== -1 && (escapedMarker(value, end) || value.charAt(end - 1) === marker.charAt(0) || value.charAt(end + marker.length) === marker.charAt(0))) { end = value.indexOf(marker, end + marker.length); }
+        if (end > index + marker.length && !/[\r\n]/.test(value.slice(index, end)) && (marker !== '**' || !/^\s|\s$/.test(value.slice(index + marker.length, end)))) {
+          parent.appendChild(document.createTextNode(value.slice(start, index)));
+          var node = document.createElement(marker === '**' ? 'strong' : 'code'); node.textContent = value.slice(index + marker.length, end); parent.appendChild(node);
+          index = end + marker.length; start = index; continue;
+        }
+      }
+      index++;
+    }
+    parent.appendChild(document.createTextNode(value.slice(start)));
+  }
+  function formatReply(output, value) {
+    output.textContent = ''; var opening = /^```[A-Za-z0-9_+.-]*[ \t]*(?:\r?\n|$)/gm, closing = /^```[ \t]*(?=\r?$)/gm, match, start = 0;
+    while ((match = opening.exec(value))) {
+      inlineReply(output, value.slice(start, match.index)); closing.lastIndex = opening.lastIndex; var end = closing.exec(value);
+      if (!end) { output.appendChild(document.createTextNode(value.slice(match.index))); start = value.length; break; }
+      var pre = document.createElement('pre'), code = document.createElement('code'); code.textContent = value.slice(opening.lastIndex, end.index); pre.appendChild(code); output.appendChild(pre);
+      start = end.index + end[0].length; opening.lastIndex = start;
+    }
+    inlineReply(output, value.slice(start));
+  }
+  function nearChatBottom() { var box = el('chatMessages'); return box.scrollHeight - box.scrollTop - box.clientHeight < 180; }
+  function scrollChat(force) { var box = el('chatMessages'); if (force || nearChatBottom()) { box.scrollTop = box.scrollHeight; } }
   function stopReading() { reader.stop(); }
   function readReply() { var replies = chat.filter(function (item) { return item.role === 'assistant'; }); if (replies.length) { reader.speak(replies[replies.length - 1].content); } }
-  function stopChat() { if (chatXHR) { chatXHR.abort(); chatXHR = null; } el('chatStop').disabled = true; el('chatSend').disabled = !el('model').value; el('model').disabled = false; }
+  function stopChat() { if (chatXHR) { chatXHR.abort(); chatXHR = null; } el('chatStop').disabled = true; updateChatControls(); el('model').disabled = false; }
+  function cannotSend(message, showSetup) { text('chatStatus', message); if (showSetup) { el('chatSetup').open = true; } if (liveVoice) { stopLive(); } }
   function sendChat(event) {
     event.preventDefault(); if (chatXHR) { return; }
     var model = el('model').value, input = el('chatInput').value.trim(), images = attachments.get();
-    if (!model) { text('chatStatus', 'Select a loaded model first.'); return; }
-    if (attachments.busy()) { text('chatStatus', 'Wait for image preparation to finish.'); return; }
+    if (!token) { cannotSend('Reconnect to the PC before sending.'); return; }
+    if (!model || !modelsReady || !loadedModels.some(function (item) { return item.id === model; })) { cannotSend('Choose an available model first.', true); return; }
+    if (attachments.busy()) { cannotSend('Wait for image preparation to finish.'); return; }
     if (!input && !images.length) { return; }
-    if ((images.length || sentImageCount()) && selectedVision() !== true) { text('chatStatus', 'Select a vision-capable model for this image conversation, or clear it to start a text chat.'); return; }
+    if ((images.length || sentImageCount()) && selectedVision() !== true) { cannotSend('Choose a vision model for this image conversation, or clear it to start a text chat.'); return; }
     stopReading(); var content = images.length ? [{type: 'text', text: input || 'Describe this image.'}].concat(images.map(function (image) { return {type: 'image_url', image_url: {url: image.url}}; })) : input;
     chat.push({role: 'user', content: content}); bubble('user', content); el('chatInput').value = ''; attachments.clear();
     var output = bubble('assistant', 'Waiting for the selected model…'), reply = '', read = 0, buffer = '', finished = false, hadError = false, receivedDone = false;
@@ -213,14 +257,14 @@
     var xhr = new XMLHttpRequest(); chatXHR = xhr; xhr.open('POST', '/api/lm/chat', true);
     xhr.setRequestHeader('Content-Type', 'application/json'); xhr.setRequestHeader('X-MAIC-Control', token);
     el('chatSend').disabled = true; el('chatStop').disabled = false; el('model').disabled = true; text('chatStatus', 'Waiting for the selected model…');
-    function finish(message) { if (finished) { return; } finished = true; if (reply) { chat.push({role: 'assistant', content: reply}); el('chatRead').disabled = false; } else { chat.pop(); attachments.restore(images); output.textContent = message; if (!el('chatInput').value) { el('chatInput').value = input; } } chatXHR = null; el('chatSend').disabled = !el('model').value; el('chatStop').disabled = true; el('model').disabled = false; text('chatStatus', message); scrollChat(false); if (liveVoice) { if (reply && receivedDone && !hadError) { reader.speak(reply); } else { stopLive(); } } }
+    function finish(message) { if (finished) { return; } finished = true; if (reply) { var follow = nearChatBottom(); if (!hadError) { formatReply(output, reply); } chat.push({role: 'assistant', content: reply}); el('chatRead').disabled = false; scrollChat(follow); } else { chat.pop(); attachments.restore(images); output.textContent = message; if (!el('chatInput').value) { el('chatInput').value = input; } } chatXHR = null; updateChatControls(); el('chatStop').disabled = true; el('model').disabled = false; text('chatStatus', message); scrollChat(false); if (liveVoice) { if (reply && receivedDone && !hadError) { reader.speak(reply); } else { stopLive(); } } }
     function parse() {
       if (finished || chatXHR !== xhr || xhr.status !== 200) { return; }
       buffer += xhr.responseText.slice(read); read = xhr.responseText.length;
       var boundary; while ((boundary = buffer.indexOf('\n\n')) !== -1) {
         var block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2); var line = block.split('\n').filter(function (value) { return value.indexOf('data: ') === 0; })[0]; if (!line) { continue; }
         var data; try { data = JSON.parse(line.slice(6)); } catch (e) { continue; }
-        if (typeof data.text === 'string') { reply += data.text; output.textContent = reply; text('chatStatus', 'Replying…'); scrollChat(false); }
+        if (typeof data.text === 'string') { var follow = nearChatBottom(); reply += data.text; output.textContent = reply; text('chatStatus', 'Replying…'); scrollChat(follow); }
         if (data.error) { hadError = true; output.textContent = reply ? reply + '\n\n[Reply interrupted: ' + data.error + ']' : data.error; finish(data.error); }
         if (data.done) { receivedDone = true; finish('Reply complete.'); }
       }
@@ -234,8 +278,9 @@
       comfyBusy = false;
       text('comfyMessage', error || data.message); if (error) { return; }
       text('comfyRunning', data.available ? data.queue.running : '—'); text('comfyPending', data.available ? data.queue.pending : '—');
-      var signature = JSON.stringify(data.outputs); if (signature === outputSignature) { return; } outputSignature = signature;
+      var signature = JSON.stringify({available: data.available, outputs: data.outputs}); if (signature === outputSignature) { return; } outputSignature = signature;
       var container = el('comfyOutputs'); if (container.querySelector('video') && Array.prototype.some.call(container.querySelectorAll('video'), function (v) { return !v.paused; })) { outputSignature = ''; return; } container.textContent = '';
+      if (!data.outputs.length) { var empty = document.createElement('article'); empty.className = 'card empty-state'; empty.setAttribute('role', 'status'); empty.textContent = data.available ? 'No recent outputs yet. New ComfyUI results appear here.' : 'Start ComfyUI on your PC to see results.'; container.appendChild(empty); }
       data.outputs.forEach(function (item) {
         var card = document.createElement('article'); card.className = 'card';
         var media = document.createElement(item.type === 'video' ? 'video' : 'img'); media.src = item.previewUrl; media.setAttribute('aria-label', item.name);
@@ -263,7 +308,7 @@
     if (!token || remoteBusy) { return; } remoteBusy = true;
     get('/api/remote/info', function (error, data) {
       text('remoteMessage', error || (data.enabled ? 'Secure address configured. Approve new browsers from this PC.' : data.message));
-      var link = el('remoteLink'); link.hidden = !!error || !data.url; if (!link.hidden) { link.href = data.url; link.textContent = 'Open secure dashboard · ' + data.url; }
+      var link = el('remoteLink'); link.hidden = !!error || !data.url; if (!link.hidden) { link.href = data.url; link.title = data.url; link.textContent = 'Open secure dashboard ↗'; }
       var voiceLink = el('voiceSecureLink'); voiceLink.hidden = !!error || !data.url || location.protocol === 'https:'; if (!voiceLink.hidden) { voiceLink.href = data.url + '/#chat'; }
       if (error || !data.enabled || !localPC) { remoteBusy = false; el('pcApproval').hidden = true; remoteSignature = ''; return; }
       get('/api/remote/status', function (statusError, state) {
@@ -340,18 +385,6 @@
       }, true);
     });
   }
-  function focusCodex(connectAfter) {
-    if (!token || codexBusy) { return; } codexBusy = true; el('codexFocusStatus').hidden = false; text('codexFocusStatus', 'Finding Codex on your PC…');
-    get('/api/pc/apps', function (error, data) {
-      var id = !error && data.integrations && data.integrations.codexAppId, app = !error && data.apps.filter(function (item) { return item.id === id; })[0];
-      if (!app) { codexBusy = false; text('codexFocusStatus', error || 'Codex was not found in Windows apps. Open it on the PC and reconnect.'); if (connectAfter) { startDesktop(true); } return; }
-      post('/api/pc/action', {id: id, action: canSwitch(app) ? 'activate' : 'open'}, function (error, result) {
-        codexBusy = false; text('codexFocusStatus', error || result.message || 'Codex opened on your PC.');
-        if (connectAfter) { startDesktop(true); }
-      }, true);
-    }, true);
-  }
-  el('codexFocus').onclick = function () { focusCodex(false); };
   el('desktopConnect').onclick = el('desktopConnectEmpty').onclick = function () { startDesktop(true); };
   window.addEventListener('message', function (event) {
     if (event.origin !== window.location.origin || event.source !== el('viewer').contentWindow) { return; }
@@ -398,17 +431,21 @@
   el('reconnect').onclick = connect; el('refreshApps').onclick = loadApps; el('appSearch').oninput = renderApps;
   el('favouritesOnly').onclick = function () { favouritesOnly = !favouritesOnly; this.setAttribute('aria-pressed', String(favouritesOnly)); renderApps(); };
   el('refreshModels').onclick = loadModels;
-  el('model').onchange = function () { stopLive(); attachments.modelChanged(); el('chatSend').disabled = !this.value || !!chatXHR; text('chatStatus', this.value ? 'Ready. Type a message or use Speak.' : 'Choose a loaded model first.'); };
+  el('model').onchange = function () { stopLive(); attachments.modelChanged(); updateChatControls(); text('chatStatus', this.value ? 'Ready to chat.' : 'Choose a model first.'); };
   el('availableModel').onchange = function () { el('loadModel').disabled = !this.value; };
   el('loadModel').onclick = function () {
-    if (!el('availableModel').value) { return; } modelLoading = true; this.disabled = true; text('lmMessage', 'Loading your selected model on the PC…');
-    post('/api/lm/load', {model: el('availableModel').value}, function (error, data) { modelLoading = false; el('loadModel').disabled = false; text('lmMessage', error || data.message); if (!error) { loadModels(); } }, true);
+    if (!el('availableModel').value) { return; }
+    if (chatXHR || modelLoading || liveVoice) { text('chatStatus', 'Stop the current conversation before choosing another model.'); return; }
+    modelLoading = true; updateChatControls(); this.disabled = true; text('lmMessage', 'Loading your selected model…');
+    post('/api/lm/load', {model: el('availableModel').value}, function (error, data) { modelLoading = false; el('loadModel').disabled = false; updateChatControls(); text('lmMessage', error || data.message); if (!error) { if (data.selectedInstanceId) { pendingModelSelection = data.selectedInstanceId; } modelSignature = ''; loadModels(); } }, true);
   };
   el('lmOpen').onclick = function () { post('/api/lm/open', {}, function (error, data) { text('lmMessage', error || data.message); }, true); };
   el('lmStart').onclick = function () { el('lmStart').disabled = true; text('lmMessage', 'Starting localhost API…'); post('/api/lm/start', {}, function (error, data) { el('lmStart').disabled = false; text('lmMessage', error || data.message); if (!error) { loadModels(); } }, true); };
   el('chatForm').onsubmit = sendChat; el('chatStop').onclick = function () { stopLive(); stopChat(); };
+  el('chatInput').oninput = updateChatControls;
+  el('chatInput').onkeydown = function (event) { if ((event.key === 'Enter' || event.keyCode === 13) && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && !event.isComposing && event.keyCode !== 229) { sendChat(event); } };
   el('chatRead').onclick = readReply; el('chatQuiet').onclick = function () { stopLive(); stopReading(); };
-  el('chatClear').onclick = function () { stopLive(); stopChat(); stopReading(); voice.cancel(); attachments.clear(); chat = []; el('chatRead').disabled = true; el('chatMessages').textContent = ''; el('chatEmpty').hidden = false; el('chatInput').value = ''; text('chatStatus', 'Conversation cleared.'); };
+  el('chatClear').onclick = function () { stopLive(); stopChat(); stopReading(); voice.cancel(); attachments.clear(); chat = []; el('chatRead').disabled = true; el('chatMessages').textContent = ''; el('chatEmpty').hidden = false; el('chatInput').value = ''; updateChatControls(); text('chatStatus', 'Conversation cleared.'); };
   el('comfyRefresh').onclick = loadComfy;
   el('refreshRemote').onclick = loadRemote;
   el('dismissApproval').onclick = function () { dismissedSignature = pendingSignature; el('pcApproval').hidden = true; };
@@ -419,13 +456,12 @@
     var payload = {schemaVersion: 1, source: 'maic-user', userAgent: navigator.userAgent, platform: navigator.platform || '', language: navigator.language || '', clientTime: new Date().toISOString(), screen: {width: screen.width, height: screen.height, pixelRatio: window.devicePixelRatio || 1}, viewport: {width: innerWidth, height: innerHeight}, capabilities: {touchPoints: navigator.maxTouchPoints || 0, cookiesEnabled: navigator.cookieEnabled, localStorage: storage, webgl: false, webglRenderer: ''}, persistence: {available: storage, previousMarker: previous, currentMarker: marker}};
     post('/api/diagnostics', payload, function (error, data) { text('helpMessage', error || 'Browser report sent: ' + data.reportId); });
   };
-  window.addEventListener('hashchange', function () { var name = location.hash.slice(1); showPage(name === 'access' ? 'home' : name); if (name === 'access') { el('remoteAccess').scrollIntoView({block: 'start'}); } });
+  window.addEventListener('hashchange', function () { var name = location.hash.slice(1); showPage(name === 'access' ? 'home' : name); if (name === 'access') { showAccess(); } });
   window.addEventListener('online', checkConnection);
   window.addEventListener('offline', function () { document.body.setAttribute('data-online', 'false'); text('connection', 'Device is offline'); });
   document.addEventListener('visibilitychange', function () { if (document.hidden) { stopLive(); voice.cancel(); } if (desktopState === 'connected') { el('viewer').contentWindow.postMessage({type: !document.hidden && page === 'desktop' ? 'maic-viewer-resume' : 'maic-viewer-suspend', connectionId: desktopGeneration}, location.origin); } if (!document.hidden) { checkConnection(); if (localPC) { loadRemote(); } if (desktopWanted && desktopState === 'disconnected') { desktopRetry = 0; scheduleDesktopRetry(); } } });
   text('address', 'Dashboard: ' + window.location.origin + '/'); sizeChrome();
-  if (codexWorkspace) { document.body.setAttribute('data-workspace', 'codex'); el('codexDesktopNote').hidden = false; el('codexFocus').hidden = false; text('desktopTitle', 'Codex workspace'); showPage('desktop'); }
-  if (!codexWorkspace && location.hash && location.hash !== '#access') { showPage(location.hash.slice(1)); }
+  if (location.hash && location.hash !== '#access') { showPage(location.hash.slice(1)); }
   connect(); renderTimer();
   setInterval(renderTimer, 500); setInterval(function () { if (document.hidden) { return; } if (page === 'apps') { loadAppState(); } }, 2000);
   setInterval(function () { if (document.hidden) { return; } if (page === 'home') { loadHardware(); loadAudio(); } if (page === 'comfy') { loadComfy(); } }, 5000);

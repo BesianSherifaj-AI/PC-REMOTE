@@ -9,21 +9,22 @@ The project began as a dashboard for an MLS MAIC iQR70. **No MAIC hardware, Andr
 - **Home:** volume, speaker and PC microphone mute, media keys, CPU/RAM and supported NVIDIA GPU metrics, saved websites, calculator, and timer.
 - **Apps:** searchable installed Windows apps, favourites, running indicators, and open/switch actions. Windows may refuse foreground activation; PC Remote reports that instead of claiming success.
 - **Desktop:** authenticated noVNC screen control. One finger clicks/drags Windows; two fingers pan/pinch the local view in Control mode. Includes Fit, zoom, touch keyboard, scrolling, keys, View only, fullscreen, and bounded reconnection.
-- **Codex:** open the installed ChatGPT/Codex desktop application in a separate browser workspace using the same desktop connection. This shares the signed-in Windows desktop, rather than isolating one application.
-- **Chat:** select an LM Studio model, stream replies, attach images when the selected model supports vision, stop generation, and clear the conversation. Optional PC-generated speech reads replies; optional local Whisper dictation turns recorded speech into editable text.
+- **Chat:** select an LM Studio model, stream replies, attach images when the selected model supports vision, stop generation, and start a new chat. Optional PC-generated speech reads replies; optional local Whisper dictation turns recorded speech into editable text.
 - **ComfyUI:** read-only queue counts and recent images/videos. Compatible video previews leave originals untouched. No workflow submission or queue changes.
 - **Away from home:** optional HTTPS gateway with browser pairing, local-PC approval, revocation, and authenticated desktop WebSockets.
 
 The PC must remain awake, online, and signed in. There is no pre-login control or wake-from-internet feature.
 
-![PC Remote image chat and local voice controls](docs/chat-preview.png)
+Use the sidebar on desktop and tablets, or the bottom navigation on phones, to switch pages. Home keeps everyday controls together; expand **Connect from anywhere** for the secure link and device approvals. **Full screen** expands the page when the browser supports it.
+
+![PC Remote chat with a model bar, image attachments, and voice controls](docs/chat-preview.png)
 
 ## Requirements
 
 - Windows 10/11, 64-bit, and **Python 3.11 or 3.12, 64-bit** from [python.org](https://www.python.org/downloads/windows/).
 - A trusted local network and a browser on the phone/tablet. Chrome 78 compatibility is retained for older Android devices; current browsers are recommended. OEM browser microphone/fullscreen support can vary.
 - For desktop viewing, install [7-Zip](https://www.7-zip.org/) so setup can extract the verified official TightVNC archive without running its installer.
-- Optional: [LM Studio](https://lmstudio.ai/) for local AI, [ComfyUI](https://github.com/Comfy-Org/ComfyUI) for generation previews, [Tailscale](https://tailscale.com/download/windows) for secure internet access, and the ChatGPT/Codex desktop app for the Codex shortcut.
+- Optional: [LM Studio](https://lmstudio.ai/) for local AI, [ComfyUI](https://github.com/Comfy-Org/ComfyUI) for generation previews, and [Tailscale](https://tailscale.com/download/windows) for secure internet access.
 
 Base Python dependencies are pinned in `requirements.txt`. The Windows audio controls use standard-library Core Audio bindings; pycaw/comtypes are not required. Large model files and private machine settings are not included in the repository.
 
@@ -73,15 +74,17 @@ The current address is also stored in `.runtime/server.url`. `localhost` on the 
 
 ## Local AI, images, and speech
 
-LM Studio is reached only by the PC backend at `127.0.0.1:1234`. Start its localhost API from Chat or LM Studio. Select a loaded model explicitly; the dashboard can also load an already installed model when you request it. It never substitutes a different model or downloads one automatically.
+LM Studio is reached only by the PC backend at `127.0.0.1:1234`. In Chat, select a loaded model from the model bar above the conversation. Expand **Model settings** to open LM Studio, start its localhost API, or load an already installed model. These controls stay collapsed during ordinary chat. Model selection is explicit; the dashboard never substitutes a different model or downloads one automatically.
 
-Image attachments require a vision-capable selected model. You can review/remove attachments before sending. Unsupported or oversized images produce an error rather than being silently dropped. Chat stays in browser memory; reloading clears it. Existing LM Studio desktop conversations are not imported.
+Type your message and press **Send**, or **Ctrl+Enter** / **Cmd+Enter**. Enter on its own adds a new line. **Stop** cancels generation; **New chat** clears the current conversation and attachments. Chat stays in browser memory; reloading clears it. Existing LM Studio desktop conversations are not imported.
+
+Choose **Image** to attach pictures for a vision-capable selected model. You can review/remove attachments before sending. Unsupported or oversized images produce an error rather than being silently dropped.
 
 Quick model buttons are shown only when the matching model is already installed: Qwen3.5 0.8B Q8, Qwen3.5 2B, and Liquid LFM2.5 1.2B. Choosing one is explicit and does not download it. Actual speed depends on your hardware and the model's settings; Liquid's text-only choice does not accept images.
 
-**Start live conversation** provides hands-free, turn-based interaction: it listens until your pause, transcribes and sends the words, generates a reply, reads it aloud, then listens again. It is not simultaneous full-duplex audio. Select a model and prepare both speech components first. Stop ends the loop; microphone and browser audio permissions still apply.
+Expand **Voice settings** for voice, speed, language, and **Live voice**. Live voice provides hands-free, turn-based interaction: it listens until your pause, transcribes and sends the words, generates a reply, reads it aloud, then listens again. It is not simultaneous full-duplex audio. Select a model and prepare both speech components first. Stop ends the loop; microphone and browser audio permissions still apply.
 
-**Read aloud** uses the optional PC speech setup, not the phone's installed voice. `Install-PCRemote.ps1 -WithSpeech` prepares both speech output and dictation during installation. To add just speech output after setup, use:
+**Read reply** uses the optional PC speech setup, not the phone's installed voice. The voice and speed controls are under **Voice settings**. `Install-PCRemote.ps1 -WithSpeech` prepares both speech output and dictation during installation. To add just speech output after setup, use:
 
 ```powershell
 .\.venv\Scripts\python.exe -X utf8 .\tools\setup_pc_speech.py
@@ -112,7 +115,7 @@ Internet access is optional and separate from installation. Install and sign in 
 
 Setup configures only the dedicated HTTPS port **8443**, pointing at the authenticated loopback gateway on **8842**, and verifies that unrelated existing Tailscale routes remain unchanged. It refuses conflicting routes. It does not require port-forwarding your router or installing Tailscale on the browser device. Funnel is a public HTTPS address whose dashboard access is protected by PC Remote's pairing; provider/account and bandwidth limitations apply.
 
-Open the resulting secure link shown on Home. A new browser sees **Connect to your PC**. Request connection, then approve the matching code on the Windows PC's local dashboard. Bookmark the secure address before travelling. Only the local PC can approve/revoke devices; the internet gateway blocks those management actions. A workplace firewall may block this address or port.
+Open the resulting secure link under **Home → Connect from anywhere**. A new browser sees **Connect to your PC**. Request connection, then approve the matching code on the Windows PC's local dashboard. Bookmark the secure address before travelling. Only the local PC can approve/revoke devices; the internet gateway blocks those management actions. A workplace firewall may block this address or port.
 
 Credentials stay out of URLs and logs. Pairing requests expire after ten minutes; approved browser sessions expire after thirty days. Revocation closes remote desktop connections. Do not share your private `.runtime` folder or approve unfamiliar requests.
 

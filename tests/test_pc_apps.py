@@ -78,7 +78,7 @@ class AppRegistryTests(unittest.TestCase):
         self.launcher.assert_not_called()
         self.activator.assert_not_called()
 
-    def test_codex_integration_uses_stable_package_identity_not_display_name(self):
+    def test_chat_apps_remain_ordinary_catalog_entries_without_a_special_workspace(self):
         discovery = {"startApps": [
             {"name": "ChatGPT", "aumid": "OpenAI.Codex_2p2nqsd0c76g0!App"},
             {"name": "ChatGPT (Beta)", "aumid": "OpenAI.CodexBeta_2p2nqsd0c76g0!App"},
@@ -88,22 +88,13 @@ class AppRegistryTests(unittest.TestCase):
                                        window_source=lambda: [], process_source=lambda: [],
                                        launcher=self.launcher)
         catalog = registry.catalog()
-        codex_id = catalog["integrations"]["codexAppId"]
-        self.assertEqual(codex_id, next(a["id"] for a in catalog["apps"] if a["name"] == "ChatGPT"))
+        self.assertNotIn("integrations", catalog)
+        self.assertEqual({a["name"] for a in catalog["apps"]}, {"ChatGPT", "ChatGPT (Beta)", "Codex"})
+        app_id = next(a["id"] for a in catalog["apps"] if a["name"] == "ChatGPT")
         self.assertNotIn("aumid", json.dumps(catalog))
         self.launcher.assert_not_called()
-        registry.action({"action": "open", "id": codex_id})
+        registry.action({"action": "open", "id": app_id})
         self.assertEqual(self.launcher.call_args.args[0]["aumid"], "OpenAI.Codex_2p2nqsd0c76g0!App")
-
-    def test_codex_integration_does_not_fall_back_to_beta_or_name_match(self):
-        discovery = {"startApps": [
-            {"name": "ChatGPT (Beta)", "aumid": "OpenAI.CodexBeta_2p2nqsd0c76g0!App"},
-            {"name": "Codex", "aumid": "OtherVendor.Codex_123!App"},
-        ], "shortcuts": []}
-        registry = pc_apps.AppRegistry(self.root, discovery=lambda: discovery,
-                                       window_source=lambda: [], process_source=lambda: [])
-        self.assertEqual(registry.catalog()["integrations"], {"codexAppId": None})
-        self.assertEqual(self.registry.catalog()["integrations"], {"codexAppId": None})
 
     def test_admin_and_maintenance_tools_are_excluded_without_losing_normal_launchers(self):
         maintenance_names = ('Administrative Tools', 'Windows Tools', 'Defragment and Optimize Drives',

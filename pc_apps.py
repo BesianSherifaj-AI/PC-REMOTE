@@ -52,7 +52,6 @@ _MAINTENANCE_EXES = {"dfrgui.exe", "appverif.exe", "verifier.exe", "iscsicpl.exe
                      "resmon.exe", "mdsched.exe", "odbcad32.exe", "msconfig.exe",
                      "msinfo32.exe"}
 _OPAQUE_ID = re.compile(r"app_[0-9a-f]{24}\Z")
-_CODEX_AUMID = "OpenAI.Codex_2p2nqsd0c76g0!App"
 
 
 def _name_key(value):
@@ -367,10 +366,7 @@ class AppRegistry:
                              "running": bool(windows or processes), "hasWindow": bool(windows),
                              "active": any(w.get("active") for w in windows),
                              "favourite": entry["id"] in self._favourites})
-            codex_id = next((entry["id"] for entry in self._entries.values()
-                             if entry.get("aumid", "").casefold() == _CODEX_AUMID.casefold()), None)
             return {"ok": True, "apps": apps, "count": len(apps),
-                    "integrations": {"codexAppId": codex_id},
                     "runningCount": sum(a["running"] for a in apps), "supported": os.name == "nt"}
 
     def state(self):
