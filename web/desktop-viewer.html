@@ -1,0 +1,291 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MAIC desktop viewer</title>
+<style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#030708;font:14px Arial;color:#eaf3f6;overflow:hidden}body{display:flex;flex-direction:column}#toolbar,#zoomControls,#typing,#scroll{display:flex;flex-shrink:0;background:#142630;padding:5px}button{font:bold 13px Arial;min-height:42px;background:#254352;border:1px solid #456676;color:white;border-radius:6px;padding:8px 12px;flex:1;margin:0 3px}button[aria-pressed=true]{background:#426b52}#screen{flex:1;min-height:0;overflow:hidden;touch-action:none;overscroll-behavior:none}#screen>div{overflow:hidden!important}#screen canvas{flex-shrink:0}#zoomControls{align-items:center;padding-top:0}#zoomControls button{flex:0 0 auto;min-width:48px;min-height:36px;padding:6px 10px}#zoomLevel{min-width:65px;text-align:center;font-size:12px}#gestureHint{flex:1;margin:0 8px;font-size:12px;color:#b5ccd5}input{flex:1;min-width:0;background:#091821;color:white;border:1px solid #456676;border-radius:6px;font:17px Arial;padding:10px}#typing button{flex:0 0 75px}#status{padding:5px 10px;background:#142630;font-size:11px}body [hidden]{display:none!important}@media(max-width:600px){button{font-size:11px;padding:7px 5px}#gestureHint{font-size:10px}}
+/* Wrap touch controls instead of squeezing them outside a phone screen. */
+@media(max-width:600px){
+  #toolbar,#scroll{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-gap:4px;padding:5px}
+  #toolbar button,#scroll button{margin:0;min-width:0;min-height:44px;font-size:11px;line-height:1.2;padding:6px 3px;white-space:normal;overflow-wrap:break-word}
+  #scroll{max-height:144px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  #zoomControls{flex-wrap:wrap;padding:4px 5px}#zoomControls button{min-height:44px;margin:0 2px;padding:6px 8px}
+  #zoomLevel{min-width:50px}#gestureHint{flex:1 1 100%;margin:5px 4px 2px;font-size:11px;line-height:1.3}
+  #typing{padding:5px}#typing input{font-size:16px;min-height:44px}#typing button{min-height:44px;flex-basis:65px;margin-left:5px}
+  #status{padding:4px 8px;font-size:10px;overflow-wrap:break-word}
+}
+@media(max-width:340px){#toolbar,#scroll{grid-template-columns:repeat(3,minmax(0,1fr))}#zoomControls button{min-width:42px;padding:6px}}
+</style></head><body>
+<div id="toolbar" role="group" aria-label="Desktop mode and controls"><button id="control" type="button" aria-pressed="true" title="One finger controls Windows; two fingers pan and pinch-zoom.">Control</button><button id="pan" type="button" aria-pressed="false" title="One-finger panning; Windows input is blocked.">Pan only</button><button id="viewOnly" type="button" aria-pressed="false">View only</button><button id="scale" type="button" aria-pressed="true">Fit screen</button><button id="keyboard" type="button">Keyboard</button><button id="scrollToggle" type="button">Scroll / keys</button><button id="fullscreen" type="button">Full / exit screen</button></div>
+<div id="zoomControls"><button id="zoomOut" aria-label="Zoom out">−</button><span id="zoomLevel">Fit</span><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomActual" title="Show desktop at its original size">100%</button><button id="quality" aria-pressed="false" title="Switch between responsive and sharper images">Fast</button><span id="gestureHint">One finger controls Windows; two fingers pan and pinch this view.</span></div>
+<form id="typing" hidden><input id="keys" aria-label="Text to type on Windows" autocomplete="off" autocapitalize="off" placeholder="Text for focused PC field"><button type="submit">Type</button></form>
+<div id="scroll" hidden><button data-wheel="-120" title="Scroll at the last point touched on the desktop">Scroll ↑</button><button data-wheel="120" title="Scroll at the last point touched on the desktop">Scroll ↓</button><button data-key="65307">Esc</button><button data-key="65289">Tab</button><button data-key="65293">Enter</button><button data-key="65288">⌫</button><button id="rightClick">Right click</button><button data-chord="copy">Ctrl+C</button><button data-chord="paste">Ctrl+V</button><button data-chord="switch">Alt+Tab</button><button id="cad">Ctrl Alt Del</button></div>
+<div id="screen"></div><div id="status">Waiting for approved connection…</div>
+<script type="module">
+import RFB from '/desktop/rfb.bundle.js';
+let rfb = null;
+let wheelPoint = {x: 0.5, y: 0.5};
+let fitMode = true;
+let mode = 'control';
+let connectionState = 'connecting';
+let connectionId = null;
+let suspended = false;
+let activeTouchIds = new Set();
+let interruptedTouchIds = new Set();
+let zoomScale = 1;
+let gesture = null;
+let controlTouchView = false;
+let mousePan = null;
+let pendingView = null;
+let viewFrame = 0;
+let suppressTouchMouseUntil = 0;
+const screen = document.getElementById('screen');
+function status(message, state) { if (state) connectionState = state; document.getElementById('status').textContent = message; parent.postMessage({type: 'maic-viewer-status', message, state: connectionState, connectionId, mode}, location.origin); }
+function canInput() { return !!rfb && mode === 'control' && !suspended && connectionState === 'connected'; }
+function localPanning() { return mode !== 'control'; }
+function key(keysym) { if (canInput()) rfb.sendKey(keysym); }
+function fitScale() {
+  if (!rfb || !rfb._display.width || !rfb._display.height) return 1;
+  return Math.min(rfb._screen.clientWidth / rfb._display.width, rfb._screen.clientHeight / rfb._display.height) || 1;
+}
+function clampZoom(value) { const minimum = fitScale(); return Math.max(minimum, Math.min(Math.max(3, minimum), value)); }
+function syncViewControls() {
+  document.getElementById('scale').setAttribute('aria-pressed', String(fitMode));
+  document.getElementById('control').setAttribute('aria-pressed', String(mode === 'control'));
+  document.getElementById('pan').setAttribute('aria-pressed', String(mode === 'pan'));
+  document.getElementById('viewOnly').setAttribute('aria-pressed', String(mode === 'view'));
+  document.getElementById('zoomLevel').textContent = (fitMode ? 'Fit ' : '') + Math.round(zoomScale * 100) + '%';
+  document.getElementById('gestureHint').textContent = mode === 'control' ? 'Control: one finger clicks or drags Windows; two fingers pan and pinch this view. Hold for right click.' : mode === 'pan' ? 'Pan only: drag with one finger; pinch with two. Control combines Windows input with two-finger navigation.' : 'View only: Windows input is blocked. Drag and pinch move this view; Control restores input.';
+  ['keyboard', 'keys', 'cad', 'rightClick'].forEach(id => { document.getElementById(id).disabled = !canInput(); });
+  document.querySelectorAll('[data-key], [data-wheel], [data-chord], #typing button').forEach(button => { button.disabled = !canInput(); });
+}
+function syncNativeInput() {
+  if (!rfb) return;
+  rfb.viewOnly = !canInput();
+  rfb.focusOnClick = canInput();
+  // noVNC listens on its canvas. Release held keys when focus moves to local UI,
+  // and do not grab them again until the user deliberately focuses the canvas.
+  if (rfb._keyboard && (!canInput() || document.activeElement !== rfb._canvas)) rfb._keyboard.ungrab();
+}
+function resetNativeTouches() {
+  if (!rfb || !rfb._gestures || typeof rfb._gestures.detach !== 'function') return;
+  const previous = rfb._gestures;
+  previous.detach();
+  rfb._gestures = new previous.constructor();
+  rfb._gestures.attach(rfb._canvas);
+  rfb._gestureLastTapTime = null; rfb._gestureFirstDoubleTapEv = null;
+}
+function releaseInput(resetTouches) {
+  controlTouchView = false;
+  clearGesture();
+  if (!rfb) return;
+  // noVNC's viewOnly setter changes its guard BEFORE ungrabbing the keyboard.
+  // Release keys/buttons first so Windows never retains a held Ctrl or mouse.
+  if (rfb._keyboard) rfb._keyboard._allKeysUp();
+  if (rfb._mouseMoveTimer !== null) { clearTimeout(rfb._mouseMoveTimer); rfb._mouseMoveTimer = null; }
+  if (rfb._mouseButtonMask) {
+    const point = rfb._mousePos || {x: 0, y: 0};
+    rfb._sendMouse(point.x, point.y, 0); rfb._mouseButtonMask = 0;
+  }
+  rfb._viewportDragging = false;
+  // Let the bundle's own capture proxy release its observer and full-page
+  // overlay. Importing a second copy of releaseCapture would miss its closure.
+  if (document.captureElement) {
+    const rect = rfb._canvas.getBoundingClientRect(), point = rfb._mousePos || {x: 0, y: 0};
+    window.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0, clientX: rect.left + point.x, clientY: rect.top + point.y}));
+  }
+  if (resetTouches) resetNativeTouches();
+  rfb.blur();
+}
+function contentPoint(anchor) {
+  const rect = rfb._canvas.getBoundingClientRect();
+  const scale = rfb._display.scale || 1;
+  return {x: (anchor.x - rect.left) / scale, y: (anchor.y - rect.top) / scale};
+}
+function centerPoint() { const rect = rfb._screen.getBoundingClientRect(); return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2}; }
+function applyZoom(value, anchor, point) {
+  if (!rfb || !rfb._display.width) return;
+  anchor = anchor || centerPoint();
+  point = point || contentPoint(anchor);
+  fitMode = false;
+  zoomScale = clampZoom(value);
+  // noVNC 1.4 has no public arbitrary zoom API. This pinned adapter uses its
+  // Display.scale so canvas drawing and remote pointer coordinates agree.
+  rfb.scaleViewport = false;
+  rfb.clipViewport = false;
+  rfb._display.scale = zoomScale;
+  const viewport = rfb._screen;
+  const rect = viewport.getBoundingClientRect();
+  const marginX = Math.max(0, (viewport.clientWidth - rfb._display.width * zoomScale) / 2);
+  const marginY = Math.max(0, (viewport.clientHeight - rfb._display.height * zoomScale) / 2);
+  viewport.scrollLeft = point.x * zoomScale + marginX - (anchor.x - rect.left);
+  viewport.scrollTop = point.y * zoomScale + marginY - (anchor.y - rect.top);
+  syncViewControls();
+}
+function flushView() {
+  if (viewFrame) { cancelAnimationFrame(viewFrame); viewFrame = 0; }
+  const next = pendingView; pendingView = null;
+  if (!next || !rfb) return;
+  if (next.zoom !== undefined) applyZoom(next.zoom, next.anchor, next.point);
+  else { rfb._screen.scrollLeft = next.left; rfb._screen.scrollTop = next.top; }
+}
+function queueView(next) {
+  pendingView = next;
+  if (!viewFrame) viewFrame = requestAnimationFrame(flushView);
+}
+function clearGesture() { gesture = null; mousePan = null; pendingView = null; if (viewFrame) cancelAnimationFrame(viewFrame); viewFrame = 0; }
+function setMode(next) {
+  if (!rfb || !['control', 'pan', 'view'].includes(next)) return;
+  flushView(); interruptedTouchIds = new Set(activeTouchIds); releaseInput(true);
+  mode = next; rfb.dragViewport = false;
+  syncNativeInput(); syncViewControls();
+  if (next !== 'control') document.getElementById('typing').hidden = true;
+  status(next === 'control' ? 'Control selected · one finger controls Windows; two fingers pan and pinch.' : next === 'pan' ? 'Pan only selected · move the view; select Control to click Windows.' : 'View only selected · Windows input is disabled; select Control to restore it.');
+}
+function zoomBy(factor) { if (rfb) { flushView(); applyZoom((rfb._display.scale || fitScale()) * factor); } }
+function consume(event) { event.preventDefault(); event.stopImmediatePropagation(); }
+function ghostMouse(event) { return Date.now() < suppressTouchMouseUntil && event.sourceCapabilities && event.sourceCapabilities.firesTouchEvents; }
+function touchGeometry(touches) {
+  if (touches.length === 1) return {x: touches[0].clientX, y: touches[0].clientY};
+  return {x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2,
+    distance: Math.max(1, Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY))};
+}
+function beginTouch(touches) {
+  flushView(); gesture = null;
+  if (!touches.length || touches.length > 2) return;
+  const point = touchGeometry(touches);
+  gesture = {count: touches.length, x: point.x, y: point.y, left: rfb._screen.scrollLeft, top: rfb._screen.scrollTop,
+    distance: point.distance, scale: rfb._display.scale || fitScale(), content: contentPoint(point)};
+}
+function handleTouch(event) {
+  activeTouchIds = new Set(Array.from(event.touches, touch => touch.identifier));
+  if (!rfb) return;
+  if (event.type === 'touchcancel') { consume(event); interruptedTouchIds = new Set(activeTouchIds); releaseInput(true); return; }
+  if (interruptedTouchIds.size) {
+    const oldTouchesRemain = Array.from(event.touches).some(touch => interruptedTouchIds.has(touch.identifier));
+    if (event.type === 'touchstart' && !oldTouchesRemain) { interruptedTouchIds.clear(); resetNativeTouches(); }
+    else { consume(event); if (!event.touches.length) { interruptedTouchIds.clear(); resetNativeTouches(); } return; }
+  }
+  if (suspended) { consume(event); return; }
+  if (!localPanning()) {
+    if (!controlTouchView && event.touches.length >= 2) {
+      // Capture the second finger before noVNC can turn it into right click,
+      // remote wheel or Ctrl+wheel. End any first-finger drag and its timers.
+      consume(event); releaseInput(true); controlTouchView = true;
+      suppressTouchMouseUntil = Date.now() + 600; beginTouch(event.touches); return;
+    }
+    if (!controlTouchView) return;
+  }
+  consume(event);
+  suppressTouchMouseUntil = Date.now() + 600;
+  // After a two-finger gesture in Control, remaining fingers stay local until
+  // all lift. The next fresh single finger starts a clean Windows gesture.
+  if (controlTouchView && !event.touches.length) { flushView(); clearGesture(); controlTouchView = false; resetNativeTouches(); return; }
+  if (event.type !== 'touchmove' || !gesture || gesture.count !== event.touches.length) { beginTouch(event.touches); return; }
+  if (event.touches.length > 2) return;
+  const point = touchGeometry(event.touches);
+  if (gesture.count === 2) queueView({zoom: gesture.scale * point.distance / gesture.distance, anchor: point, point: gesture.content});
+  else queueView({left: gesture.left - (point.x - gesture.x), top: gesture.top - (point.y - gesture.y)});
+}
+['touchstart', 'touchmove', 'touchend', 'touchcancel'].forEach(type => screen.addEventListener(type, handleTouch, {capture: true, passive: false}));
+screen.addEventListener('mousedown', event => {
+  if (ghostMouse(event)) { consume(event); return; }
+  if (!localPanning() || !rfb) return;
+  consume(event);
+  if (event.button !== 0) return;
+  mousePan = {x: event.clientX, y: event.clientY, left: rfb._screen.scrollLeft, top: rfb._screen.scrollTop};
+}, true);
+window.addEventListener('mousemove', event => {
+  if (!mousePan || !rfb) return;
+  consume(event); queueView({left: mousePan.left - (event.clientX - mousePan.x), top: mousePan.top - (event.clientY - mousePan.y)});
+}, true);
+window.addEventListener('mouseup', event => { if (mousePan) { consume(event); flushView(); mousePan = null; } }, true);
+screen.addEventListener('mousemove', event => { if (localPanning() || ghostMouse(event)) consume(event); }, true);
+screen.addEventListener('mouseup', event => { if (localPanning() || ghostMouse(event)) consume(event); }, true);
+screen.addEventListener('contextmenu', event => { if (localPanning() || ghostMouse(event)) consume(event); }, true);
+screen.addEventListener('click', event => { if (localPanning() || ghostMouse(event)) consume(event); }, true);
+window.addEventListener('blur', () => { interruptedTouchIds = new Set(activeTouchIds); releaseInput(true); });
+window.addEventListener('pointercancel', () => { interruptedTouchIds = new Set(activeTouchIds); releaseInput(true); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { interruptedTouchIds = new Set(activeTouchIds); releaseInput(true); } });
+function rememberPointer(event) {
+  const canvas = document.querySelector('#screen canvas');
+  if (!canvas) return;
+  const point = event.changedTouches ? event.changedTouches[0] : event;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height || point.clientX < rect.left || point.clientX > rect.right || point.clientY < rect.top || point.clientY > rect.bottom) return;
+  wheelPoint = {x: (point.clientX - rect.left) / rect.width, y: (point.clientY - rect.top) / rect.height};
+}
+['pointerdown', 'mousemove', 'touchstart'].forEach(type => document.getElementById('screen').addEventListener(type, rememberPointer, true));
+function wheel(delta) {
+  const canvas = document.querySelector('#screen canvas');
+  if (!canInput() || !canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  // Use noVNC's regular DOM listener to send a real RFB wheel tick.
+  canvas.dispatchEvent(new WheelEvent('wheel', {bubbles: true, cancelable: true, deltaMode: 0, deltaY: delta,
+    clientX: rect.left + rect.width * wheelPoint.x, clientY: rect.top + rect.height * wheelPoint.y}));
+}
+window.addEventListener('message', event => {
+  if (event.origin !== location.origin || event.source !== parent || !event.data) return;
+  if (event.data.type === 'maic-viewer-suspend' || event.data.type === 'maic-viewer-resume') {
+    if (!rfb || event.data.connectionId !== undefined && event.data.connectionId !== connectionId) return;
+    interruptedTouchIds = new Set(activeTouchIds); releaseInput(true); suspended = event.data.type === 'maic-viewer-suspend'; syncNativeInput(); syncViewControls(); return;
+  }
+  if (event.data.type !== 'maic-viewer-connect' || rfb) return;
+  if (event.data.port !== 8841) { status('Unexpected desktop gateway.'); return; }
+  try {
+      const id = event.data.connectionId;
+      connectionId = typeof id === 'number' && Number.isFinite(id) || typeof id === 'string' && id.length <= 64 ? id : null;
+      mode = ['control', 'pan', 'view'].includes(event.data.mode) ? event.data.mode : 'control';
+      status('Connecting to the Windows desktop…', 'connecting');
+    const websocketUrl = location.protocol === 'https:' ? 'wss://' + location.host + '/desktop/ws' : 'ws://' + location.hostname + ':' + event.data.port + '/desktop/ws';
+    rfb = new RFB(document.getElementById('screen'), websocketUrl, {credentials: event.data.credentials || {}});
+    if (!rfb._display || typeof rfb._updateScale !== 'function') throw new Error('Unsupported noVNC zoom adapter');
+    const originalUpdateScale = rfb._updateScale.bind(rfb);
+    rfb._updateScale = function () {
+      if (fitMode) originalUpdateScale();
+      else { zoomScale = clampZoom(zoomScale); rfb._display.scale = zoomScale; }
+      zoomScale = rfb._display.scale || fitScale(); syncViewControls();
+    };
+    rfb.scaleViewport = true; rfb.resizeSession = false; rfb.clipViewport = false; rfb.showDotCursor = true;
+    rfb.qualityLevel = 4; rfb.compressionLevel = 2;
+    rfb._canvas.addEventListener('focus', () => { if (canInput()) rfb._keyboard.grab(); });
+    rfb._canvas.addEventListener('blur', () => { if (rfb._keyboard) rfb._keyboard.ungrab(); });
+    syncNativeInput(); syncViewControls();
+    rfb.addEventListener('connect', () => { connectionState = 'connected'; syncNativeInput(); syncViewControls(); status(mode === 'control' ? 'Connected · Control selected · one finger controls Windows; two fingers pan and pinch.' : 'Connected · ' + (mode === 'pan' ? 'Pan only' : 'View only') + ' selected · select Control to click Windows.'); });
+    rfb.addEventListener('disconnect', event => { releaseInput(false); status(event.detail.clean ? 'Desktop disconnected. Tap Connect desktop to reconnect.' : 'Connection lost. Tap Connect desktop to reconnect.', 'disconnected'); syncNativeInput(); syncViewControls(); });
+    rfb.addEventListener('securityfailure', () => status('Desktop authentication failed. Reconnect from the dashboard.'));
+    rfb.addEventListener('credentialsrequired', () => status('Private desktop credentials unavailable. Reconnect from the dashboard.'));
+  } catch (error) { if (rfb) rfb.disconnect(); status('This browser could not open the desktop viewer.', 'disconnected'); }
+});
+document.getElementById('scale').onclick = function () { if (!rfb) return; flushView(); clearGesture(); fitMode = true; rfb.scaleViewport = true; rfb.clipViewport = false; rfb._screen.scrollLeft = 0; rfb._screen.scrollTop = 0; syncViewControls(); };
+document.getElementById('control').onclick = () => setMode('control');
+document.getElementById('pan').onclick = () => setMode('pan');
+document.getElementById('viewOnly').onclick = () => setMode('view');
+document.getElementById('zoomIn').onclick = () => zoomBy(1.25);
+document.getElementById('zoomOut').onclick = () => zoomBy(0.8);
+document.getElementById('zoomActual').onclick = () => { if (rfb) { flushView(); applyZoom(1); } };
+document.getElementById('quality').onclick = function () { if (!rfb) return; const sharp = this.getAttribute('aria-pressed') !== 'true'; rfb.qualityLevel = sharp ? 8 : 4; this.setAttribute('aria-pressed', String(sharp)); this.textContent = sharp ? 'Sharp' : 'Fast'; };
+document.getElementById('keyboard').onclick = () => { if (!canInput()) return; const form = document.getElementById('typing'); form.hidden = !form.hidden; if (!form.hidden) document.getElementById('keys').focus(); };
+document.getElementById('scrollToggle').onclick = () => { const bar = document.getElementById('scroll'); bar.hidden = !bar.hidden; };
+document.getElementById('fullscreen').onclick = () => parent.postMessage({type: 'maic-viewer-fullscreen'}, location.origin);
+document.querySelectorAll('[data-key]').forEach(button => { button.onclick = () => key(Number(button.getAttribute('data-key'))); });
+document.querySelectorAll('[data-wheel]').forEach(button => { button.onclick = () => wheel(Number(button.getAttribute('data-wheel'))); });
+document.getElementById('cad').onclick = () => { if (canInput()) rfb.sendCtrlAltDel(); };
+document.getElementById('rightClick').onclick = () => {
+  if (!canInput()) return;
+  const rect = rfb._canvas.getBoundingClientRect();
+  const x = rect.width * wheelPoint.x, y = rect.height * wheelPoint.y;
+  rfb._handleMouseButton(x, y, true, 4); rfb._handleMouseButton(x, y, false, 4);
+};
+const chords = {copy: [[0xffe3, 'ControlLeft'], [0x63, 'KeyC']], paste: [[0xffe3, 'ControlLeft'], [0x76, 'KeyV']], switch: [[0xffe9, 'AltLeft'], [0xff09, 'Tab']]};
+document.querySelectorAll('[data-chord]').forEach(button => { button.onclick = () => {
+  if (!canInput()) return;
+  const chord = chords[button.getAttribute('data-chord')]; if (!chord) return;
+  chord.forEach(item => rfb.sendKey(item[0], item[1], true));
+  chord.slice().reverse().forEach(item => rfb.sendKey(item[0], item[1], false));
+}; });
+document.getElementById('typing').onsubmit = event => {
+  event.preventDefault(); if (!canInput()) return;
+  const input = document.getElementById('keys');
+  for (const char of input.value.slice(0, 4096)) { const code = char.codePointAt(0); key(code === 10 ? 0xff0d : code < 256 ? code : 0x01000000 | code); }
+  input.value = ''; input.focus();
+};
+window.addEventListener('pagehide', () => { releaseInput(false); if (rfb) rfb.disconnect(); });
+parent.postMessage({type: 'maic-viewer-ready'}, location.origin);
+</script></body></html>

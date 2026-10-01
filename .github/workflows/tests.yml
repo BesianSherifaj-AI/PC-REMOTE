@@ -1,0 +1,40 @@
+name: Windows checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest pytest-subtests numpy==2.4.3
+      - name: Python services and access boundaries
+        run: python -X utf8 -m pytest tests -q
+      - name: Browser behavior
+        shell: pwsh
+        run: |
+          foreach ($suite in @('test_desktop_viewer.js', 'test_app_ui.js', 'test_voice.js', 'test_chat_media.js')) {
+            node "tests/$suite"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Windows startup and remote setup
+        shell: powershell
+        run: |
+          & .\tests\Test-Startup.ps1 -SkipShortcuts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\tests\Test-RemoteSetup.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
