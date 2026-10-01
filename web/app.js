@@ -8,7 +8,7 @@
   var liveVoice = false, quickSignature = '', pendingModelSelection = '';
   var loadedModels = [], modelsReady = false;
   var modelSignature = '', availableSignature = '', remoteSignature = '', healthBusy = false;
-  var expandedTarget = null, expansionFocus = null, fullscreenGeneration = 0;
+  var expandedTarget = null, expansionFocus = null, fullscreenGeneration = 0, pendingFullscreen = null;
   var desktopWanted = false, desktopState = 'disconnected', desktopMode = 'control', desktopGeneration = 0, desktopRetry = 0, desktopRetryTimer = null, desktopWatchdog = null;
   var voice = window.createMaicVoice({liveMode: function () { return liveVoice; }, onError: function () { stopLive(); }, onIdle: function (reason) { if (liveVoice && reason !== 'transcribed') { stopLive(); } }, token: function () { return token; }, append: function (value) {
     var input = el('chatInput'); input.value = (input.value ? input.value + ' ' : '') + value; updateChatControls(); input.scrollIntoView({block: 'nearest'}); if (liveVoice) { sendChat({preventDefault: function () {}}); }
@@ -59,7 +59,7 @@
     });
   }
   function showPage(name) {
-    fullscreenGeneration++; exitExpanded(false);
+    fullscreenGeneration++; cancelFullscreenRequest(); exitExpanded(false);
     if (['home', 'apps', 'desktop', 'chat', 'comfy'].indexOf(name) < 0) { name = 'home'; }
     page = name; each('.page', function (item) { item.hidden = item.id !== page; });
     document.body.setAttribute('data-page', name);
@@ -340,10 +340,18 @@
   function standaloneMode() { return !!navigator.standalone || !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches); }
   function nativeFullscreen() { return document.fullscreenElement || document.webkitFullscreenElement || document.webkitCurrentFullScreenElement; }
   function fullscreenMethod(target) { return document.fullscreenEnabled !== false && target.requestFullscreen || document.webkitFullscreenEnabled !== false && (target.webkitRequestFullscreen || target.webkitRequestFullScreen); }
+  function fullscreenActive(request) { return nativeFullscreen() === request.target || request.video && (request.videoStarted || request.target.webkitDisplayingFullscreen || request.target.webkitPresentationMode === 'fullscreen'); }
+  function cancelFullscreenRequest() {
+    if (!pendingFullscreen) { return; } var request = pendingFullscreen; pendingFullscreen = null; clearTimeout(request.timer);
+    if (request.videoHandler) { request.target.removeEventListener('webkitbeginfullscreen', request.videoHandler); }
+  }
   function fullscreenChanged() {
+    if (pendingFullscreen && fullscreenActive(pendingFullscreen)) { cancelFullscreenRequest(); }
+    if (expandedTarget && nativeFullscreen() === expandedTarget) { exitExpanded(false); }
     var active = nativeFullscreen(), appMode = !fullscreenMethod(document.documentElement);
     text('appFullscreen', active ? 'Exit full screen' : appMode ? 'App mode' : 'Full screen'); el('appFullscreen').setAttribute('aria-pressed', String(!!active));
     text('desktopFullscreen', expandedTarget === el('desktopFrame') ? 'Exit expanded view' : active === el('desktopFrame') ? 'Exit desktop' : 'Expand desktop'); el('desktopFullscreen').setAttribute('aria-pressed', String(active === el('desktopFrame') || expandedTarget === el('desktopFrame'))); sizeChrome();
+    text('desktopBrowserExpand', expandedTarget === el('desktopFrame') ? 'Exit expanded view' : 'Fill browser'); el('desktopBrowserExpand').setAttribute('aria-pressed', String(expandedTarget === el('desktopFrame')));
   }
   function exitExpanded(restoreFocus) {
     if (!expandedTarget) { return; } var previous = expansionFocus;
@@ -368,7 +376,7 @@
     try { var result = method.call(document); if (result && result.catch) { result.catch(failed); } } catch (error) { failed(); }
   }
   function toggleFullscreen(target) {
-    var active = nativeFullscreen(), result, generation = ++fullscreenGeneration;
+    cancelFullscreenRequest(); var active = nativeFullscreen(), result, generation = ++fullscreenGeneration;
     if (expandedTarget === target) { exitExpanded(); return; }
     if (active && (target === document.documentElement || active === target)) { exitNativeFullscreen(); return; }
     if (target === document.documentElement && !fullscreenMethod(target)) { showAppModeHelp(false); return; }
@@ -378,12 +386,20 @@
       else { expandInBrowser(target); toast('Expanded within the browser. Use Exit expanded view to return.'); }
     }
     try {
-      var method = fullscreenMethod(target);
-      if (method) { exitExpanded(false); result = method.call(target); }
-      else if (target.tagName === 'VIDEO' && (target.webkitEnterFullscreen || target.webkitEnterFullScreen)) { result = (target.webkitEnterFullscreen || target.webkitEnterFullScreen).call(target); }
-      else { expandInBrowser(target); return; }
-      if (result && result.catch) { result.catch(function () { failed(false); }); }
-    } catch (error) { failed(true); }
+      var method = fullscreenMethod(target), video = !method && target.tagName === 'VIDEO' && (target.webkitEnterFullscreen || target.webkitEnterFullScreen);
+      if (!method && !video) { expandInBrowser(target); return; }
+      var request = {target: target, generation: generation, video: !!video}; pendingFullscreen = request;
+      request.check = function (error, unavailable) {
+        if (pendingFullscreen !== request || generation !== fullscreenGeneration) { return; }
+        if (fullscreenActive(request)) { cancelFullscreenRequest(); fullscreenChanged(); return; }
+        if (error) { cancelFullscreenRequest(); failed(unavailable); }
+      };
+      if (video) { request.videoHandler = function () { request.videoStarted = true; request.check(false); }; target.addEventListener('webkitbeginfullscreen', request.videoHandler); }
+      request.timer = setTimeout(function () { request.check(true, false); }, 1500);
+      exitExpanded(false); result = (method || video).call(target); request.check(false);
+      if (result && result.then) { result.then(function () { request.check(false); }, function () { request.check(true, false); }); }
+      else if (result && result.catch) { result.catch(function () { request.check(true, false); }); }
+    } catch (error) { cancelFullscreenRequest(); failed(true); }
   }
   function toggleDesktopFullscreen() { toggleFullscreen(el('desktopFrame')); }
   function updateDesktopControls() {
@@ -436,10 +452,13 @@
   el('desktopDisconnect').onclick = disconnectDesktop;
   el('desktopFullscreen').onclick = toggleDesktopFullscreen;
   el('appFullscreen').onclick = function () { toggleFullscreen(document.documentElement); };
-  el('expandedExit').onclick = function () { fullscreenGeneration++; exitExpanded(); };
-  document.addEventListener('keydown', function (event) { if (expandedTarget && (event.key === 'Escape' || event.keyCode === 27)) { event.preventDefault(); fullscreenGeneration++; exitExpanded(); } });
+  el('desktopBrowserExpand').onclick = function () { fullscreenGeneration++; cancelFullscreenRequest(); if (expandedTarget === el('desktopFrame')) { exitExpanded(); } else { expandInBrowser(el('desktopFrame')); } };
+  el('expandedExit').onclick = function () { fullscreenGeneration++; cancelFullscreenRequest(); exitExpanded(); };
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape' || event.keyCode === 27) { fullscreenGeneration++; cancelFullscreenRequest(); if (expandedTarget) { event.preventDefault(); exitExpanded(); } } });
   el('desktopAutoReconnect').onchange = function () { if (!this.checked) { clearTimeout(desktopRetryTimer); } else if (desktopState === 'disconnected') { desktopRetry = 0; scheduleDesktopRetry(); } };
   document.addEventListener('fullscreenchange', fullscreenChanged); document.addEventListener('webkitfullscreenchange', fullscreenChanged);
+  function fullscreenError(event) { var request = pendingFullscreen; if (request && (!event.target || event.target === document || event.target === request.target)) { request.check(true, false); } }
+  document.addEventListener('fullscreenerror', fullscreenError); document.addEventListener('webkitfullscreenerror', fullscreenError);
   window.addEventListener('resize', sizeChrome); if (window.visualViewport) { window.visualViewport.addEventListener('resize', sizeChrome); window.visualViewport.addEventListener('scroll', sizeChrome); } if (window.ResizeObserver) { new ResizeObserver(sizeChrome).observe(document.querySelector('.app-chrome')); }
   function checkConnection() {
     if (healthBusy) { return; } healthBusy = true; var started = Date.now();
@@ -506,5 +525,5 @@
   setInterval(function () { if (!document.hidden && page === 'chat') { loadModels(); } }, 8000);
   setInterval(function () { if (!document.hidden && localPC) { loadRemote(); } }, 3000);
   setInterval(function () { if (!document.hidden) { checkConnection(); } }, 15000);
-  window.addEventListener('pagehide', function () { fullscreenGeneration++; exitExpanded(false); stopLive(); voice.cancel(); stopChat(); stopReading(); disconnectDesktop(); });
+  window.addEventListener('pagehide', function () { fullscreenGeneration++; cancelFullscreenRequest(); exitExpanded(false); stopLive(); voice.cancel(); stopChat(); stopReading(); disconnectDesktop(); });
 }());

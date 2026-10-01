@@ -25,6 +25,7 @@ function harness({hash = '', standalone = false, displayMode = false, configure}
     getAttribute(name) { return this.attributes[name] || null; }
     removeAttribute(name) { delete this.attributes[name]; }
     addEventListener(name, callback) { (this.listeners[name] || (this.listeners[name] = [])).push(callback); }
+    removeEventListener(name, callback) { this.listeners[name] = (this.listeners[name] || []).filter(listener => listener !== callback); }
     querySelectorAll(selector) { const found = []; this.children.forEach(child => { if (child.tagName.toLowerCase() === selector) found.push(child); found.push(...child.querySelectorAll(selector)); }); return found; }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
     scrollIntoView() {} reset() {} pause() { this.paused = true; }
@@ -322,6 +323,7 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
   assert.equal(count(desktop, '/api/desktop/session'), sessionRequests, 'Cancelled connection negotiation must not create a desktop session');
 
   const noNative = harness(); assert.equal(noNative.elements.appFullscreen.textContent, 'App mode');
+  function activationWatchdog(test) { const timer = Array.from(test.timers.values()).find(item => item.ms === 1500); assert.ok(timer, 'Expected a bounded fullscreen activation check'); return timer; }
   noNative.page('apps'); noNative.elements.appFullscreen.onclick(); assert.equal(noNative.document.body.getAttribute('data-page'), 'home');
   assert.equal(noNative.elements.appModeHelp.open, true); assert.equal(noNative.document.activeElement, noNative.elements.appModeHelp);
   assert.equal(noNative.document.body.getAttribute('data-expanded'), null); assert.equal(noNative.elements.appFullscreen.getAttribute('aria-pressed'), 'false');
@@ -347,8 +349,10 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
 
   let entered = 0, exited = 0; const native = harness({configure({root, document}) { root.requestFullscreen = () => { entered++; return Promise.resolve(); }; document.exitFullscreen = () => { exited++; return Promise.resolve(); }; }});
   assert.equal(native.elements.appFullscreen.textContent, 'Full screen'); native.elements.appFullscreen.onclick(); assert.equal(entered, 1);
+  const nativeWatchdog = activationWatchdog(native);
   assert.equal(native.elements.appFullscreen.textContent, 'Full screen', 'A request alone must not claim fullscreen succeeded');
   native.document.fullscreenElement = native.root; native.emitDocument('fullscreenchange'); assert.equal(native.elements.appFullscreen.textContent, 'Exit full screen');
+  assert.ok(!Array.from(native.timers.values()).includes(nativeWatchdog), 'Genuine fullscreen must cancel its activation check'); nativeWatchdog.fn(); assert.notEqual(native.elements.appModeHelp.open, true);
   native.elements.appFullscreen.onclick(); assert.equal(exited, 1); native.document.fullscreenElement = null; native.emitDocument('fullscreenchange'); assert.equal(native.elements.appFullscreen.textContent, 'Full screen');
   native.document.fullscreenElement = native.root; native.emitDocument('fullscreenchange'); native.document.exitFullscreen = () => Promise.reject(new Error('Synthetic exit denial'));
   native.elements.appFullscreen.onclick(); await ready(); assert.match(native.elements.toast.textContent, /Could not exit full screen/); assert.equal(native.elements.appFullscreen.getAttribute('aria-pressed'), 'true');
@@ -363,6 +367,27 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
   rejected.elements.appFullscreen.onclick(); assert.match(rejected.elements.toast.textContent, /unavailable/);
   const late = harness(); let rejectLate; late.page('desktop'); late.elements.desktopFrame.requestFullscreen = () => new Promise((_resolve, reject) => { rejectLate = reject; });
   late.elements.desktopFullscreen.onclick(); late.page('apps'); rejectLate(new Error('Late denial')); await ready(); assert.equal(late.document.body.getAttribute('data-expanded'), null);
+  const silentRoot = harness({configure({root}) { root.webkitRequestFullscreen = function () {}; }}); silentRoot.elements.appFullscreen.onclick();
+  assert.equal(silentRoot.elements.appFullscreen.textContent, 'Full screen'); activationWatchdog(silentRoot).fn(); assert.equal(silentRoot.elements.appModeHelp.open, true);
+  assert.equal(silentRoot.elements.appFullscreen.getAttribute('aria-pressed'), 'false', 'A silently ignored request must not report native fullscreen');
+  const resolved = harness({configure({elements}) { elements.desktopFrame.requestFullscreen = () => Promise.resolve(); }}); resolved.page('desktop'); resolved.elements.desktopFullscreen.onclick(); await ready();
+  assert.equal(resolved.document.body.getAttribute('data-expanded'), null); activationWatchdog(resolved).fn(); assert.equal(resolved.document.body.getAttribute('data-expanded'), 'desktop', 'A resolved promise without native activation must reach browser expansion');
+  resolved.document.fullscreenElement = resolved.elements.desktopFrame; resolved.emitDocument('fullscreenchange'); assert.equal(resolved.document.body.getAttribute('data-expanded'), null, 'Late actual native success must clear overlapping browser expansion');
+  const errors = harness({configure({elements}) { elements.desktopFrame.webkitRequestFullscreen = function () {}; }}); errors.page('desktop'); errors.elements.desktopFullscreen.onclick();
+  const errorWatchdog = activationWatchdog(errors); errors.emitDocument('webkitfullscreenerror', {target: errors.elements.chatInput}); assert.equal(errors.document.body.getAttribute('data-expanded'), null);
+  errors.emitDocument('webkitfullscreenerror', {target: errors.elements.desktopFrame}); assert.equal(errors.document.body.getAttribute('data-expanded'), 'desktop');
+  assert.ok(!Array.from(errors.timers.values()).includes(errorWatchdog)); errors.elements.expandedExit.onclick(); errorWatchdog.fn(); assert.equal(errors.document.body.getAttribute('data-expanded'), null, 'A stale watchdog after user Exit must not reopen expansion');
+  errors.elements.desktopFullscreen.onclick(); const navigationWatchdog = activationWatchdog(errors); errors.page('home'); navigationWatchdog.fn(); errors.emitDocument('fullscreenerror', {target: errors.elements.desktopFrame});
+  assert.equal(errors.document.body.getAttribute('data-expanded'), null, 'Navigation must cancel both activation timeout and error fallback');
+  const trueState = harness({configure({elements}) { elements.desktopFrame.requestFullscreen = function () {}; }}); trueState.page('desktop'); trueState.elements.desktopFullscreen.onclick();
+  trueState.document.fullscreenElement = trueState.elements.desktopFrame; trueState.emitDocument('fullscreenerror', {target: trueState.elements.desktopFrame});
+  assert.equal(trueState.document.body.getAttribute('data-expanded'), null, 'An error event must check genuine native state before falling back');
+  let directNativeCalls = 0; const direct = harness({configure({elements}) { elements.desktopFrame.requestFullscreen = () => { directNativeCalls++; }; }});
+  direct.page('desktop'); direct.elements.desktopBrowserExpand.onclick(); assert.equal(directNativeCalls, 0); assert.equal(direct.document.body.getAttribute('data-expanded'), 'desktop');
+  assert.equal(direct.elements.desktopBrowserExpand.getAttribute('aria-pressed'), 'true'); assert.equal(direct.elements.desktopBrowserExpand.textContent, 'Exit expanded view');
+  direct.elements.desktopBrowserExpand.onclick(); assert.equal(direct.document.body.getAttribute('data-expanded'), null); assert.equal(direct.elements.desktopBrowserExpand.textContent, 'Fill browser');
+  direct.elements.desktopFullscreen.onclick(); const directWatchdog = activationWatchdog(direct); direct.elements.desktopBrowserExpand.onclick(); direct.elements.expandedExit.onclick(); directWatchdog.fn();
+  assert.equal(directNativeCalls, 1); assert.equal(direct.document.body.getAttribute('data-expanded'), null, 'Direct browser expansion must invalidate a pending native request');
 
   const media = harness(); media.page('comfy'); media.pending('/api/comfy/status').respond({...idleComfy, outputs: [{id: 'image', name: 'Image', type: 'image', previewUrl: '/api/comfy/output/image'}]});
   const mediaCard = media.elements.comfyOutputs.children[0], imageElement = mediaCard.querySelector('img'); mediaCard.querySelector('button').focus(); mediaCard.querySelector('button').onclick();
@@ -374,6 +399,8 @@ async function ready() { await Promise.resolve(); await Promise.resolve(); }
   video.webkitEnterFullscreen = () => { videoNative++; }; videoCard.querySelectorAll('button').find(button => button.textContent === 'Full screen').onclick();
   assert.equal(videoNative, 1); assert.equal(media.document.body.getAttribute('data-expanded'), null, 'Native video player must remain separate from browser expansion');
   video.webkitEnterFullscreen = null; video.webkitEnterFullScreen = () => { videoNative++; }; videoCard.querySelectorAll('button').find(button => button.textContent === 'Full screen').onclick(); assert.equal(videoNative, 2);
+  const videoWatchdog = activationWatchdog(media); video.listeners.webkitbeginfullscreen[0](); assert.ok(!Array.from(media.timers.values()).includes(videoWatchdog));
+  videoWatchdog.fn(); assert.equal(media.document.body.getAttribute('data-expanded'), null, 'The separate native video player must cancel the document-fullscreen watchdog');
   const viewportEvents = {}; const viewport = harness({configure({window}) { window.visualViewport = {height: 390.5, offsetTop: 20.6, addEventListener(name, callback) { viewportEvents[name] = callback; }}; }});
   assert.equal(viewport.root.style['--viewport-top'], '21px'); assert.equal(viewport.root.style['--viewport-height'], '391px'); assert.ok(viewportEvents.scroll);
   console.log('Dashboard UI: polling/history, composer/keyboard, image guards/restoration, model selection, live voice, favourite serialization, desktop and fullscreen passed.');
